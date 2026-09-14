@@ -97,7 +97,7 @@ Run `make help` for all targets.
 - **IEEE-CIS Fraud Detection** (Vesta, Kaggle 2019): anonymised e-commerce transactions with fraud
   labels. It is downloaded locally and never redistributed. It lacks explicit card, device, merchant and IP
   identifiers, so Bastion maps it onto its canonical event schema with documented proxies
-  (ADR-011, planned).
+  (ADR-011 in `docs/ARCHITECTURE.md`, caveats in `docs/data_dictionary.md`).
 - **Synthetic transactions** from Bastion's own generator, used for tests, CI, and attack injection.
 
 ## Repository layout

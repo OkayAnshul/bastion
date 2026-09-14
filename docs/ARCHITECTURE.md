@@ -199,6 +199,13 @@ subject to `reviews_per_day ≤ N`.
 **Rejected:** an LLM scoring transactions (latency, cost, non-determinism, no regulatory defensibility).
 **Guardrail to build:** the narrative must cite feature values it was given; add a check that flags any number in the output not present in the input payload.
 
+### ADR-011 — Mapping anonymised IEEE-CIS onto the canonical schema
+*Added during Phase 0 (implementation decision).*
+**Chose:** a deterministic adapter at the dataset boundary (`bastion.data.adapter`) that builds proxy entity ids. `card_id` hashes card1–card6, addr1 and `D1n` (the account's first-seen day). `device_id` is a coarse fingerprint (DeviceInfo, OS, browser, screen) when identity data exists, else null. `merchant_id` is a proxy from ProductCD and the recipient email domain. `ip` stays null. `event_ts` is a fixed anchor (2017-11-30 UTC) plus `TransactionDT`. Every other raw column travels as an `attr_*` vendor attribute. Amounts stay in USD, the dataset's currency.
+**Why:** every downstream component (stream, Redis keys, graph) is written against the canonical schema. Mapping once at the boundary keeps the platform dataset-agnostic, and the synthetic generator emits the same table with real entities.
+**Rejected:** renaming the canonical schema to IEEE-CIS columns, which couples the whole platform to one anonymised dataset. Raw `card1` as the card id, since one card1 value is shared by many customers and velocity would measure a bank segment, not a customer. Inventing IPs or merchants, since fabricated structure would fabricate graph lift. Converting USD to INR at an assumed rate, which is false precision.
+**Cost:** the proxies are weak. Merchant and device nodes are hubs, most rows have no device, and there is no IP. Velocity, entity-risk and graph results on IEEE-CIS therefore understate what real processor data would allow. The README limitations say so.
+
 ---
 
 ## 5. What "done" looks like
@@ -217,3 +224,22 @@ That is the whole game.
 - Injected attack patterns are designed by me, so drift detection is being graded on a test I wrote.
 
 Stating these makes every other claim you make more believable.
+
+---
+
+## 7. Implementation notes
+
+Deviations and clarifications recorded while building. Each one is the smallest change that resolves a
+conflict between this document and reality.
+
+- **Docs location.** Design documents live in `docs/`.
+- **Build mode.** The owner chose build-first over the teach-while-building rules in
+  `docs/CLAUDE_CODE_KICKOFF.md`. `CLAUDE.md` records the working agreement.
+- **Currency.** Monetary results are reported in USD, the IEEE-CIS native currency. The rupee framing
+  in ADR-005 is illustrative. See ADR-011.
+- **Kafka topics** *(Phase 2, planned).* Created idempotently by application code rather than a
+  one-shot compose container, which keeps `docker compose up --wait` simple.
+- **Analyst console** *(Phase 4, planned).* Streamlit, served on port 3000 to match §5.
+- **Retraining trigger** *(Phase 6, planned).* A Python job invoked by the monitor, not an orchestrator
+  DAG. One pipeline does not justify Airflow.
+- **Offline store.** Parquet on local disk; no MinIO.
