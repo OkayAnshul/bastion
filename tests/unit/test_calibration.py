@@ -14,6 +14,8 @@ from bastion.evaluation.calibration import (
     fit_calibrator,
     log_loss,
     reliability_bins,
+    reliability_bins_log,
+    select_calibration_method,
 )
 
 
@@ -90,3 +92,35 @@ def test_platt_calibrator_is_monotone() -> None:
     calibrator = PlattCalibrator(slope=1.3, intercept=-2.0)
     predictions = calibrator.predict(np.linspace(0.001, 0.999, 100))
     assert np.all(np.diff(predictions) > 0)
+
+
+def test_selection_rejects_isotonic_when_it_assigns_zero_risk_to_real_fraud() -> None:
+    rng = np.random.default_rng(4)
+    scores = rng.random(4_000)
+    early = np.arange(4_000) < 2_800
+    # Early rows: fraud only at high scores. Later rows: some fraud at every score.
+    labels = np.where(early, (scores > 0.8) & (rng.random(4_000) < 0.5), rng.random(4_000) < 0.1)
+    method, losses = select_calibration_method(scores, labels, holdout_fraction=0.3)
+    assert method == "platt"
+    assert losses["isotonic"] > losses["platt"]
+
+
+def test_selection_needs_fraud_on_both_sides_of_the_holdout_cut() -> None:
+    scores = np.linspace(0, 1, 100)
+    labels = np.arange(100) < 5  # all fraud in the fitting part
+    with pytest.raises(ValueError, match="both"):
+        select_calibration_method(scores, labels, holdout_fraction=0.3)
+
+
+def test_log_bins_give_the_rare_high_risk_tail_its_own_bins() -> None:
+    rng = np.random.default_rng(5)
+    probabilities = np.concatenate([rng.random(9_900) * 0.01, 0.5 + rng.random(100) * 0.4])
+    labels = rng.random(10_000) < probabilities
+    equal_mass = reliability_bins(labels, probabilities, n_bins=15)
+    log_spaced = reliability_bins_log(labels, probabilities, min_count=20)
+    assert sum(b.mean_predicted > 0.1 for b in equal_mass) <= 1  # the tail is diluted into one bin
+    assert max(b.mean_predicted for b in log_spaced) > 0.5  # log spacing keeps it separate
+
+
+def test_log_bins_drop_bins_too_sparse_to_estimate() -> None:
+    assert reliability_bins_log([1, 0, 1], [0.9, 0.5, 0.2], min_count=50) == []

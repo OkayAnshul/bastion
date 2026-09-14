@@ -95,5 +95,5 @@ def test_label_maturity_check_rejects_labels_arriving_inside_the_next_window() -
 
 def test_repository_model_config_is_valid() -> None:
     config = load_model_config(REPO_ROOT / "configs")
-    assert config.calibration == "isotonic"
+    assert config.calibration == "select"
     assert config.lightgbm["objective"] == "binary"

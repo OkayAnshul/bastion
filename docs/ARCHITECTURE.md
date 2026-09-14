@@ -243,6 +243,17 @@ conflict between this document and reality.
 - **Retraining trigger** *(Phase 6, planned).* A Python job invoked by the monitor, not an orchestrator
   DAG. One pipeline does not justify Airflow.
 - **Offline store.** Parquet on local disk; no MinIO.
+- **Calibrator selection (ADR-006).** ROADMAP names isotonic calibration. On the first synthetic run,
+  isotonic lowered test PR-AUC from 0.9998 to 0.9863 and raised log loss from 0.0005 to 0.0040 compared
+  with the uncalibrated scores, while Platt matched them. Isotonic regression can map score ranges that
+  held no fraud in the calibration window to a probability of exactly 0, and an expected-loss policy
+  would approve everything there. Bastion therefore picks isotonic or Platt by log loss on the most
+  recent 30% of the calibration window and refits the winner on the whole window
+  (`calibration: select`). The test window never influences the choice. On the revised synthetic
+  generator the selection chose Platt (holdout log loss 0.00016 vs 0.00022).
+- **Synthetic data proves pipelines, not models.** The generator's attacks are separable by design
+  (LightGBM test PR-AUC 1.0000 on the 183-day synthetic table), so model quality and the leakage gap
+  are reported from IEEE-CIS only. See `docs/learning/mistakes.md`.
 - **Phase gate vs. data access.** ROADMAP says no phase starts before the previous phase's exit
   criteria are met. Phase 0's exit numbers need IEEE-CIS, and the download needs the owner's Kaggle
   token. While that is pending, Phase 1 *code* is built and tested on synthetic data. No Phase 1

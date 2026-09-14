@@ -163,3 +163,60 @@ def calibrator_from_dict(data: dict[str, Any]) -> Calibrator:
     if data["method"] == "platt":
         return PlattCalibrator(float(data["slope"]), float(data["intercept"]))
     raise ValueError(f"unknown calibration method {data['method']!r}")
+
+
+def select_calibration_method(
+    scores: npt.ArrayLike,
+    labels: npt.ArrayLike,
+    *,
+    holdout_fraction: float,
+    candidates: tuple[CalibrationMethod, ...] = ("isotonic", "platt"),
+) -> tuple[CalibrationMethod, dict[str, float]]:
+    """Choose a calibrator by log loss on the most recent part of the calibration rows.
+
+    Rows must be in time order. Each candidate is fit on the earlier ``1 - holdout_fraction`` and
+    scored on the rest; the caller refits the winner on all rows. Log loss punishes the failure that
+    matters to a cost-based policy: isotonic regression assigning a probability of exactly zero to a
+    score region where fraud does happen. Ties go to the earlier candidate.
+    """
+    s = np.asarray(scores, dtype=np.float64)
+    y = np.asarray(labels, dtype=np.bool_)
+    if not 0 < holdout_fraction < 1:
+        raise ValueError("holdout_fraction must lie strictly between 0 and 1")
+    cut = round(s.size * (1 - holdout_fraction))
+    if not y[:cut].any() or not y[cut:].any():
+        raise ValueError("calibration rows need fraud in both the fitting part and the holdout")
+    losses: dict[str, float] = {
+        method: log_loss(y[cut:], fit_calibrator(method, s[:cut], y[:cut]).predict(s[cut:]))
+        for method in candidates
+    }
+    return min(candidates, key=lambda method: losses[method]), losses
+
+
+def reliability_bins_log(
+    labels: npt.ArrayLike,
+    probabilities: npt.ArrayLike,
+    *,
+    floor: float = 1e-4,
+    bins_per_decade: int = 4,
+    min_count: int = 50,
+) -> list[ReliabilityBin]:
+    """Bins evenly spaced in log-probability, for plotting the calibration of rare events.
+
+    With fraud near 1%, equal-mass bins (used for ECE) put almost every bin in the low-risk bulk.
+    Log spacing gives the high-risk tail bins of its own. Probabilities below ``floor``, including
+    exact zeros, share the first bin. Bins with fewer than ``min_count`` rows are dropped as too
+    noisy to plot.
+    """
+    y, p = _checked(labels, probabilities)
+    decades = int(np.ceil(-np.log10(floor)))
+    edges = np.logspace(np.log10(floor), 0.0, decades * bins_per_decade + 1)
+    edges[0] = 0.0
+    index = np.clip(np.searchsorted(edges, p, side="right") - 1, 0, edges.size - 2)
+    bins = []
+    for b in range(edges.size - 1):
+        mask = index == b
+        count = int(mask.sum())
+        if count >= min_count:
+            bins.append(ReliabilityBin(float(p[mask].mean()), float(y[mask].mean()), count))
+    return bins

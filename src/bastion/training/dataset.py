@@ -30,7 +30,8 @@ class ModelConfig(BaseModel):
     lightgbm: dict[str, Any]
     num_boost_round: int = Field(ge=1)
     early_stopping_rounds: int = Field(ge=1)
-    calibration: Literal["isotonic", "platt"]
+    calibration: Literal["select", "isotonic", "platt"]
+    calibration_holdout_fraction: float = Field(gt=0, lt=1)
     label_strength: float = Field(gt=0)
     passthrough: tuple[str, ...]
     max_category_levels: int = Field(ge=1)

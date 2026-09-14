@@ -20,9 +20,11 @@ lightgbm:
 num_boost_round: 3000
 early_stopping_rounds: 100
 
-# Calibrator the policy engine consumes. Chosen a priori (ROADMAP: isotonic); Platt is also fit and
-# reported for comparison, never selected on the test window.
-calibration: isotonic
+# Calibrator the policy engine consumes (ADR-006). "select" fits isotonic and Platt on the earlier 70%
+# of the calibration window, keeps the one with lower log loss on the most recent 30%, then refits it
+# on the whole window. The test window never influences the choice. See ARCHITECTURE.md §7.
+calibration: select
+calibration_holdout_fraction: 0.3
 
 # Pseudo-count shrinking a merchant's known fraud rate toward the global known rate.
 label_strength: 100.0
