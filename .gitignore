@@ -23,20 +23,22 @@ node_modules/
 !.env.example
 kaggle.json
 
+# Directory patterns are anchored with a leading "/": an unanchored `data/` also matched the
+# src/bastion/data package and silently dropped it from a commit (docs/learning/mistakes.md).
+
 # --- Data (IEEE-CIS competition rules forbid redistribution) ---
-data/
-!tests/fixtures/**
+/data/
 
 # --- Generated artifacts ---
-artifacts/
-mlruns/
-mlartifacts/
+/artifacts/
+/mlruns/
+/mlartifacts/
+/profiles/
 *.db
 *.sqlite
 *.sqlite3
 *.parquet
 !tests/fixtures/**/*.parquet
-profiles/
 
 # --- OS / editors ---
 .DS_Store
