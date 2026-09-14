@@ -237,8 +237,9 @@ conflict between this document and reality.
   `docs/CLAUDE_CODE_KICKOFF.md`. `CLAUDE.md` records the working agreement.
 - **Currency.** Monetary results are reported in USD, the IEEE-CIS native currency. The rupee framing
   in ADR-005 is illustrative. See ADR-011.
-- **Kafka topics** *(Phase 2, planned).* Created idempotently by application code rather than a
-  one-shot compose container, which keeps `docker compose up --wait` simple.
+- **Kafka topics.** Created idempotently by application code (`bastion stream topics`, and at
+  feature-builder startup) rather than a one-shot compose container, which keeps
+  `docker compose up --wait` simple.
 - **Analyst console** *(Phase 4, planned).* Streamlit, served on port 3000 to match §5.
 - **Retraining trigger** *(Phase 6, planned).* A Python job invoked by the monitor, not an orchestrator
   DAG. One pipeline does not justify Airflow.
@@ -254,6 +255,20 @@ conflict between this document and reality.
 - **Synthetic data proves pipelines, not models.** The generator's attacks are separable by design
   (LightGBM test PR-AUC 1.0000 on the 183-day synthetic table), so model quality and the leakage gap
   are reported from IEEE-CIS only. See `docs/learning/mistakes.md`.
+- **Online store design (ADR-004).** Every Redis structure can be read *as of* any time: histories
+  are sorted sets scored by event time, and reads use exclusive upper bounds. A feature read for a
+  transaction at time q therefore sees only events and labels strictly before q, however far
+  ingestion has progressed. The same parity checks run in two modes: "write everything, then read
+  as of the past", and "read, then write" (production order, with trimming on). Earliest-seen
+  times use `ZADD LT`, so out-of-order writes from different partitions keep the minimum. Label
+  counts are sets of label ids rather than counters, so at-least-once delivery cannot double-count.
+  Histories are trimmed in event time to the longest window that reads them (30 days for cards, 7 for
+  devices); key TTLs are only a wall-clock safety net for entities that go quiet. An entity idle for
+  longer than the lifetime TTL (400 days) is forgotten, and its online age and familiarity features
+  would then differ from a batch recomputation.
+- **Raw event sink** *(deferred to Phase 6).* The Parquet sink that turns the stream into an offline
+  store is built with the retraining loop, which is its first consumer. Until then, training reads
+  the prepared event table directly.
 - **Phase gate vs. data access.** ROADMAP says no phase starts before the previous phase's exit
   criteria are met. Phase 0's exit numbers need IEEE-CIS, and the download needs the owner's Kaggle
   token. While that is pending, Phase 1 *code* is built and tested on synthetic data. No Phase 1

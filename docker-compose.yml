@@ -91,6 +91,27 @@ services:
       mlflow:
         condition: service_healthy
 
+  # Consumes transactions and labels and keeps the Redis online store current (Phase 2).
+  feature-builder:
+    <<: *bastion-app
+    command: ["stream", "features"]
+    restart: unless-stopped
+    depends_on:
+      redpanda:
+        condition: service_healthy
+      redis:
+        condition: service_healthy
+
+  # Replays a prepared event table in event time. Generate one first, e.g.
+  # `uv run bastion data synthetic`, then `docker compose --profile demo up simulator`.
+  simulator:
+    <<: *bastion-app
+    profiles: ["demo"]
+    command: ["stream", "replay", "--events", "data/processed/events_synthetic.parquet", "--speedup", "3600"]
+    depends_on:
+      feature-builder:
+        condition: service_started
+
 volumes:
   redpanda-data:
   mlflow-data:

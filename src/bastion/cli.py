@@ -16,6 +16,8 @@ from bastion.log import configure_logging
 if TYPE_CHECKING:
     import polars as pl
 
+    from bastion.features.online import OnlineFeatureStore
+
 app = typer.Typer(
     no_args_is_help=True,
     add_completion=False,
@@ -24,9 +26,13 @@ app = typer.Typer(
 data_app = typer.Typer(no_args_is_help=True, help="Dataset download and preparation.")
 baseline_app = typer.Typer(no_args_is_help=True, help="Baselines every model must beat.")
 experiment_app = typer.Typer(no_args_is_help=True, help="Experiments with published results.")
+stream_app = typer.Typer(
+    no_args_is_help=True, help="Streaming path: topics, replay, feature builder."
+)
 app.add_typer(data_app, name="data")
 app.add_typer(baseline_app, name="baseline")
 app.add_typer(experiment_app, name="experiment")
+app.add_typer(stream_app, name="stream")
 
 EventsOption = Annotated[
     Path | None,
@@ -220,3 +226,90 @@ def experiment_leakage(
     )
     for result in results:
         typer.echo(f"{result.name:22} test PR-AUC {result.pr_auc:.4f}")
+
+
+# ------------------------------------------------------------------------------ phase 2
+
+
+def _online_store() -> OnlineFeatureStore:
+    import redis
+
+    from bastion.features.online import OnlineFeatureStore
+    from bastion.streaming.config import load_streaming_config
+
+    client = redis.Redis.from_url(get_settings().redis_url, decode_responses=True)
+    return OnlineFeatureStore(client, load_streaming_config().online_store)
+
+
+@stream_app.command("topics")
+def stream_topics() -> None:
+    """Create the Kafka topics if they do not exist yet."""
+    from bastion.streaming.config import load_streaming_config
+    from bastion.streaming.topics import ensure_topics
+
+    topics = load_streaming_config().topics
+    created = ensure_topics(get_settings().kafka_bootstrap, [topics.transactions, topics.labels])
+    typer.echo(f"created: {', '.join(created) if created else 'none (all topics exist)'}")
+
+
+@stream_app.command("replay")
+def stream_replay(
+    events: EventsOption = None,
+    speedup: Annotated[
+        float, typer.Option(help="Event-seconds per wall-second (0 = as fast as possible).")
+    ] = 0.0,
+    limit: Annotated[int | None, typer.Option(help="Stop after this many transactions.")] = None,
+    labels: Annotated[
+        bool, typer.Option("--labels/--no-labels", help="Also publish simulated label arrivals.")
+    ] = True,
+    direct: Annotated[
+        bool, typer.Option("--direct", help="Write straight into Redis instead of Redpanda.")
+    ] = False,
+) -> None:
+    """Replay an event table in event-time order into Redpanda, or straight into Redis."""
+    from bastion.data.labels import label_events, load_label_delay_config
+    from bastion.streaming.config import load_streaming_config
+    from bastion.streaming.replay import EventSink, KafkaSink, StoreSink, replay, timeline
+    from bastion.streaming.topics import ensure_topics
+
+    frame, source = _read_events(events)
+    settings = get_settings()
+    topics = load_streaming_config().topics
+    arrivals = label_events(frame, load_label_delay_config()) if labels else None
+    sink: EventSink
+    if direct:
+        sink = StoreSink(_online_store())
+    else:
+        ensure_topics(settings.kafka_bootstrap, [topics.transactions, topics.labels])
+        sink = KafkaSink(settings.kafka_bootstrap, topics)
+    stats = replay(timeline(frame, arrivals), sink, speedup=speedup or None, limit=limit)
+    typer.echo(
+        f"replayed {stats.transactions:,} transactions and {stats.labels:,} labels from {source}:"
+        f" {stats.event_span_ms / 86_400_000:.1f} event-days in {stats.wall_seconds:.1f} s"
+    )
+
+
+@stream_app.command("features")
+def stream_features(
+    max_messages: Annotated[int | None, typer.Option(help="Stop after this many messages.")] = None,
+    idle_timeout: Annotated[
+        float | None, typer.Option(help="Stop after this many seconds without messages.")
+    ] = None,
+) -> None:
+    """Run the streaming feature builder: consume events and labels into the online store."""
+    from bastion.streaming.config import load_streaming_config
+    from bastion.streaming.feature_builder import run_feature_builder
+    from bastion.streaming.topics import ensure_topics
+
+    settings = get_settings()
+    config = load_streaming_config()
+    ensure_topics(settings.kafka_bootstrap, [config.topics.transactions, config.topics.labels])
+    processed = run_feature_builder(
+        settings.kafka_bootstrap,
+        config.consumer_group,
+        config.topics,
+        _online_store(),
+        max_messages=max_messages,
+        idle_timeout_s=idle_timeout,
+    )
+    typer.echo(f"processed {processed:,} messages")
