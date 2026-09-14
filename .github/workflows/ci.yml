@@ -47,3 +47,25 @@ jobs:
       - name: Tear down
         if: always()
         run: docker compose down -v
+
+  # ROADMAP Phase 2 exit criterion: features built from the stream equal batch features.
+  stream-parity:
+    runs-on: ubuntu-latest
+    steps:
+      - uses: actions/checkout@v7
+      - uses: astral-sh/setup-uv@v10.1.0
+        with:
+          python-version: "3.12"
+          enable-cache: true
+      - name: Install dependencies (locked)
+        run: uv sync --frozen
+      - name: Start Redpanda and Redis
+        run: docker compose up -d --wait --wait-timeout 180 redpanda redis
+      - name: Batch/stream parity tests
+        run: uv run pytest -m integration -v
+      - name: Service logs
+        if: failure()
+        run: docker compose logs --tail=60 redpanda redis
+      - name: Tear down
+        if: always()
+        run: docker compose down -v
