@@ -13,7 +13,7 @@ import polars as pl
 from bastion.data.splits import SPLIT_COLUMN, SplitConfig, assign_splits
 from bastion.evaluation.cost import Action, CostModel
 from bastion.evaluation.metrics import evaluate_decisions, ranking_metrics
-from bastion.features.batch import compute_features
+from bastion.features.batch import REQUIRED_EVENT_COLUMNS, compute_features
 from bastion.provenance import git_revision
 from bastion.rules.baseline import (
     RULE_NAMES,
@@ -23,7 +23,8 @@ from bastion.rules.baseline import (
     fit_thresholds,
 )
 
-EVENT_COLUMNS = ("txn_id", "event_ts", "card_id", "device_id", "amount", "is_fraud")
+# What the rules baseline reads: the feature inputs plus the label. The CLI loads only these.
+EVENT_COLUMNS = (*REQUIRED_EVENT_COLUMNS, "is_fraud")
 REPORT_STEM = "rules_baseline"
 
 

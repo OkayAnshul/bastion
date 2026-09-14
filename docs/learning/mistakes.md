@@ -70,3 +70,72 @@ committing.
 *commit* does. The thing you ship is the commit, so verification must run against what was committed.
 Ignore rules are code: an overly broad pattern is a silent data-loss bug. And never trust a safety
 mechanism (`set -e`) you haven't seen fire in the environment you're actually using.
+
+---
+
+## 2026-09-14: A near-perfect model that had learned the data generator
+
+**Phase:** 1 · **Commit(s):** `fix: remove generator shortcut that made device sharing a perfect fraud flag`
+
+**Symptom.** The first `bastion train` on the 183-day synthetic table scored a test PR-AUC of
+**0.9998** for LightGBM and 0.9930 for logistic regression. One feature,
+`device_distinct_cards_7d`, carried **54.5%** of total gain. The leakage experiment could not show
+anything: the leaky and honest pipelines differed by 0.0002, because every variant sat at the ceiling.
+
+**Initial hypothesis.** The new point-in-time features leaked future information. That was plausible,
+since a near-perfect score is the textbook leakage symptom. It did not hold: the no-future-information
+property tests passed, and the leaky pipeline was not involved in that run.
+
+**Actual cause.** The generator, not the features. Every legitimate card had two devices of its own
+that no other card ever used, while attackers drew from a shared pool of 12 devices. "A device used by
+more than one card" was therefore a perfect fraud flag, one that exists nowhere in real payments.
+The model learned the generator.
+
+**Fix.** Households of 2–4 cards now share devices and a home connection. 40% of attacks use a
+never-seen device, 20% of account takeovers come from the victim's own device, and legitimate
+customers make bursts of quick purchases. Regression tests assert that legitimate devices can be
+shared and that some fraud uses a device the card already uses. After the fix, device-sharing
+features left the top of the importance table (`card_txn_count_1m` 36.0%, `amount` 26.7%).
+
+**What is still true.** Test PR-AUC on synthetic data is still 1.0000. The attacks are extreme by
+design: probe bursts seconds apart, tiny amounts, cash-outs many times a card's usual spend. Making
+them subtler until a pleasing gap appears would be designing the result. Synthetic runs are
+therefore pipeline checks only; model quality and the leakage gap are reported from IEEE-CIS.
+
+**How we could have detected it earlier.**
+- Treat a near-perfect score as a bug report, not a result.
+- Read the feature-importance table before reading the metric.
+- Test the generator for real-world properties it must have ("legitimate devices can be shared"),
+  not only for the properties it was built to produce.
+
+**What the bug teaches.** When you generate data, you also generate its shortcuts. A model finds the
+cheapest separator you left in, and a perfect score is usually a map of that separator.
+
+---
+
+## 2026-09-14: The CLI loaded the columns rules needed, until features needed one more
+
+**Phase:** 1 · **Commit(s):** `fix: derive CLI column projection from the feature executor`
+
+**Symptom.** After the Phase 1 feature groups landed, all unit tests passed. But
+`bastion baseline rules` on a prepared table failed with
+`ColumnNotFoundError: unable to find column "merchant_id"`.
+
+**Initial hypothesis.** The rewritten synthetic generator changed the table's schema. It had not: the
+table passed the offline contract, and `bastion eda` read the same file without complaint.
+
+**Actual cause.** To save memory on the 434-column IEEE-CIS table, the CLI loads only
+`EVENT_COLUMNS`, a hand-written tuple in `bastion.rules.evaluate`. `compute_features` had started
+needing `merchant_id` (distinct merchants, merchant familiarity), and the tuple was not updated. The
+unit tests handed `run_rules_baseline` full tables, so the projected path was never exercised.
+
+**Fix.** `bastion.features.batch.REQUIRED_EVENT_COLUMNS` is now the single list; `EVENT_COLUMNS`
+derives from it. `compute_features` checks its inputs up front and names any missing column. Two
+regression tests run the baseline on exactly the projected columns, and drive the CLI end to end
+(synthetic data → EDA → rules baseline → training).
+
+**How we could have detected it earlier.** Test through the entry point people run, not only the
+function it calls. And keep derived lists derived.
+
+**What the bug teaches.** An optimisation that copies knowledge ("which columns are needed") creates a
+second place that must change. The bug shows up in whichever copy nobody tests.

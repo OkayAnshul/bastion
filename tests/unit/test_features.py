@@ -344,3 +344,9 @@ def test_label_features_never_depend_on_later_events_or_labels(
     expected = compute_features(events, label_events(events, LABELS)).filter(keep)
     past = events.filter(keep)
     assert compute_features(past, label_events(past, LABELS)).equals(expected)
+
+
+def test_missing_event_columns_fail_with_a_readable_message() -> None:
+    events = _events([("c", 0, 1.0, None)]).drop("merchant_id")
+    with pytest.raises(ValueError, match="merchant_id"):
+        compute_features(events)

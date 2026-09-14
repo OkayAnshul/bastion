@@ -42,6 +42,10 @@ _CODE = "_code"
 _COUNT_PREFIXES = ("card_txn_count_", "card_distinct_", "device_txn_count_", "device_distinct_")
 _INTEGER_FEATURES = ("card_prior_fraud_labels", "merchant_known_labels")
 
+# Event columns compute_features reads. A caller that loads only some columns (the CLI does, to
+# save memory on wide tables) must derive its list from this one.
+REQUIRED_EVENT_COLUMNS = ("txn_id", "event_ts", "card_id", "device_id", "merchant_id", "amount")
+
 
 def feature_names(*, with_labels: bool) -> list[str]:
     """Feature columns in canonical order. Label features need the arrived-label table."""
@@ -97,6 +101,9 @@ def compute_features(
     ``labels`` is the arrived-label table from ``bastion.data.labels.label_events``. Without it, the
     label-based entity-risk features are omitted.
     """
+    missing = [c for c in REQUIRED_EVENT_COLUMNS if c not in events.columns]
+    if missing:
+        raise ValueError(f"compute_features needs event columns {missing}")
     columns = _columns(events)
     features: dict[str, pl.Series] = {}
     features |= _card_velocity(columns)

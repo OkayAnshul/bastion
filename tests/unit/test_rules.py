@@ -15,7 +15,7 @@ from bastion.rules.baseline import (
     fit_thresholds,
     load_rule_config,
 )
-from bastion.rules.evaluate import run_rules_baseline, score_rules, write_report
+from bastion.rules.evaluate import EVENT_COLUMNS, run_rules_baseline, score_rules, write_report
 from bastion.streaming.synthetic import SyntheticConfig, generate
 
 REPO_ROOT = Path(__file__).resolve().parents[2]
@@ -162,3 +162,10 @@ def test_baseline_report_is_complete_and_reproducible(events: pl.DataFrame, tmp_
 
 def test_repository_rule_config_is_valid() -> None:
     assert load_rule_config(REPO_ROOT / "configs").spike_min_history >= 1
+
+
+def test_baseline_runs_on_exactly_the_columns_the_cli_loads(events: pl.DataFrame) -> None:
+    # Regression: the CLI loads only EVENT_COLUMNS. When features began to need merchant_id, unit
+    # tests (which passed full tables) stayed green while `bastion baseline rules` failed.
+    result = run_rules_baseline(events.select(EVENT_COLUMNS), SPLITS, COSTS, CONFIG)
+    assert "test" in result.windows
