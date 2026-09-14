@@ -1,0 +1,19 @@
+# Decision cost model (ADR-005).
+#
+# These values are ASSUMPTIONS, not measurements. IEEE-CIS carries no merchant economics. They are
+# stated explicitly so every monetary result can be traced back to them, and Phase 4 reports how
+# the policy changes when they vary.
+currency: USD
+
+# Approving a fraudulent transaction loses its full amount (the chargeback). That is the
+# definition of the loss, so it has no parameter.
+
+# Declining a legitimate transaction loses the margin on the sale, plus a fixed friction cost per
+# declined customer (support contact, abandoned basket, churn risk).
+false_decline_margin_rate: 0.10
+false_decline_fixed_cost: 2.00
+
+# Sending a transaction to human review: analyst time per case, and the share of reviewed frauds
+# the analyst actually stops.
+review_cost_per_case: 5.00
+review_catch_rate: 0.90
