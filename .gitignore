@@ -1,0 +1,45 @@
+# --- Python ---
+__pycache__/
+*.py[cod]
+*.egg-info/
+.venv/
+venv/
+build/
+dist/
+
+# --- Tooling caches ---
+.pytest_cache/
+.mypy_cache/
+.ruff_cache/
+.coverage
+coverage.xml
+htmlcov/
+.ipynb_checkpoints/
+node_modules/
+
+# --- Secrets ---
+.env
+.env.*
+!.env.example
+kaggle.json
+
+# --- Data (IEEE-CIS competition rules forbid redistribution) ---
+data/
+!tests/fixtures/**
+
+# --- Generated artifacts ---
+artifacts/
+mlruns/
+mlartifacts/
+*.db
+*.sqlite
+*.sqlite3
+*.parquet
+!tests/fixtures/**/*.parquet
+profiles/
+
+# --- OS / editors ---
+.DS_Store
+.idea/
+.vscode/
+*.swp
