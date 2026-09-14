@@ -6,7 +6,9 @@ readme = "README.md"
 requires-python = ">=3.12,<3.13"
 authors = [{ name = "OkayAnshul" }]
 dependencies = [
+    "lightgbm>=4.5",
     "matplotlib>=3.10",
+    "mlflow>=3.1",
     "numpy>=2.2",
     "polars>=1.30",
     "pyarrow>=19",
@@ -58,7 +60,7 @@ strict = true
 warn_unreachable = true
 
 [[tool.mypy.overrides]]
-module = ["sklearn.*", "kaggle.*", "pyarrow.*"]
+module = ["sklearn.*", "kaggle.*", "pyarrow.*", "lightgbm.*", "mlflow.*"]
 ignore_missing_imports = true
 
 [tool.pytest.ini_options]

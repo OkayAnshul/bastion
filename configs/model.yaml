@@ -1,0 +1,49 @@
+# Phase 1 model configuration (ADR-002 LightGBM, ADR-006 calibration).
+seed: 7
+
+lightgbm:
+  objective: binary
+  learning_rate: 0.05
+  num_leaves: 63
+  min_data_in_leaf: 100
+  feature_fraction: 0.8
+  bagging_fraction: 0.8
+  bagging_freq: 1
+  lambda_l2: 1.0
+  max_bin: 255
+  # A fixed thread count plus deterministic mode make runs reproducible on the same machine.
+  num_threads: 8
+  deterministic: true
+  force_row_wise: true
+  verbosity: -1
+
+num_boost_round: 3000
+early_stopping_rounds: 100
+
+# Calibrator the policy engine consumes. Chosen a priori (ROADMAP: isotonic); Platt is also fit and
+# reported for comparison, never selected on the test window.
+calibration: isotonic
+
+# Pseudo-count shrinking a merchant's known fraud rate toward the global known rate.
+label_strength: 100.0
+
+# Vendor attributes passed to the model unchanged: regular expressions over attribute names without
+# the attr_ prefix. IEEE-CIS V1-V339 are excluded; including them is a separate, measured ablation.
+passthrough:
+  - "^C\\d+$"
+  - "^D\\d+$"
+  - "^M\\d+$"
+  - "^card[1-6]$"
+  - "^addr[12]$"
+  - "^dist[12]$"
+  - "^(P|R)_emaildomain$"
+  - "^DeviceType$"
+  - "^id_\\d+$"
+  - "^email_domain$"
+  - "^device_type$"
+
+# String inputs keep their most frequent training levels; rarer and unseen levels share one code.
+max_category_levels: 200
+
+# Bootstrap resamples for confidence intervals on test PR-AUC.
+bootstrap_resamples: 200

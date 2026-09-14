@@ -15,25 +15,26 @@ from typing import Any, cast
 
 import numpy as np
 import polars as pl
-from matplotlib.axes import Axes
 from matplotlib.dates import AutoDateLocator, ConciseDateFormatter
-from matplotlib.figure import Figure
 from matplotlib.ticker import FuncFormatter, NullFormatter
 
 from bastion.data.splits import SPLIT_COLUMN, SplitConfig, assign_splits
+from bastion.plotting import (
+    BASELINE,
+    INK_MUTED,
+    INK_SECONDARY,
+    SERIES,
+    SURFACE,
+    count_axis,
+    new_figure,
+    percent_axis,
+    style_axes,
+)
 from bastion.provenance import git_revision
 from bastion.schemas.tables import ATTRIBUTE_PREFIX
 
-# Reference data-viz palette on its light surface. The two class colours are categorical slots 1
-# and 2, checked with the dataviz palette validator. Text uses ink tokens, never series colours.
-SURFACE = "#fcfcfb"
-INK_PRIMARY = "#0b0b0b"
-INK_SECONDARY = "#52514e"
-INK_MUTED = "#898781"
-GRIDLINE = "#e1e0d9"
-BASELINE = "#c3c2b7"
-LEGIT_COLOR = "#2a78d6"
-FRAUD_COLOR = "#eb6834"
+LEGIT_COLOR = SERIES[0]
+FRAUD_COLOR = SERIES[1]
 
 FIGURES = ("eda_amount_by_class.png", "eda_daily.png", "eda_hourly.png")
 QUANTILES = (0.01, 0.05, 0.25, 0.5, 0.75, 0.95, 0.99)
@@ -203,36 +204,13 @@ def _categories(labelled: pl.DataFrame) -> list[dict[str, Any]]:
 # ------------------------------------------------------------------------------ figures
 
 
-def _figure(width: float, height: float) -> Figure:
-    return Figure(figsize=(width, height), dpi=150, facecolor=SURFACE, layout="constrained")
-
-
-def _style(ax: Axes, title: str) -> None:
-    ax.set_facecolor(SURFACE)
-    for side in ("top", "right", "left"):
-        ax.spines[side].set_visible(False)
-    ax.spines["bottom"].set_color(BASELINE)
-    ax.grid(axis="y", color=GRIDLINE, linewidth=1, linestyle="-")
-    ax.set_axisbelow(True)
-    ax.tick_params(colors=INK_MUTED, labelsize=9, length=0)
-    ax.set_title(title, loc="left", color=INK_PRIMARY, fontsize=11, fontweight="bold")
-
-
-def _count_axis(ax: Axes) -> None:
-    ax.yaxis.set_major_formatter(FuncFormatter(lambda v, _: f"{v:,.0f}"))
-
-
-def _percent_axis(ax: Axes, digits: int = 0) -> None:
-    ax.yaxis.set_major_formatter(FuncFormatter(lambda v, _: f"{v:.{digits}f}%"))
-
-
 def plot_amount_by_class(labelled: pl.DataFrame, currency: str, path: Path) -> None:
     amount = labelled["amount"].to_numpy()
     fraud = labelled["is_fraud"].to_numpy().astype(bool)
     edges = np.logspace(np.log10(amount.min()), np.log10(amount.max()), 60)
     centres = np.sqrt(edges[:-1] * edges[1:])
 
-    fig = _figure(8, 4)
+    fig = new_figure(8, 4)
     ax = fig.add_subplot()
     for label, mask, color in (("Legitimate", ~fraud, LEGIT_COLOR), ("Fraud", fraud, FRAUD_COLOR)):
         counts, _ = np.histogram(amount[mask], bins=edges)
@@ -241,11 +219,11 @@ def plot_amount_by_class(labelled: pl.DataFrame, currency: str, path: Path) -> N
     ax.set_xscale("log")
     ax.xaxis.set_major_formatter(FuncFormatter(lambda v, _: f"{v:,.0f}"))
     ax.xaxis.set_minor_formatter(NullFormatter())
-    _percent_axis(ax)
+    percent_axis(ax)
     ax.set_xlabel(f"Transaction amount ({currency}, log scale)", color=INK_SECONDARY, fontsize=9)
     ax.set_ylabel("Share of the class's transactions", color=INK_SECONDARY, fontsize=9)
     ax.legend(frameon=False, loc="upper right", labelcolor=INK_SECONDARY, fontsize=9)
-    _style(ax, "Amount distribution by class")
+    style_axes(ax, "Amount distribution by class")
     fig.savefig(path)
 
 
@@ -261,14 +239,14 @@ def _daily(labelled: pl.DataFrame) -> pl.DataFrame:
 def plot_daily(labelled: pl.DataFrame, windows: list[dict[str, Any]], path: Path) -> None:
     daily = _daily(labelled)
     days = daily["day"].to_list()
-    fig = _figure(9, 5.5)
+    fig = new_figure(9, 5.5)
     volume, rate = fig.subplots(2, 1, sharex=True)
     volume.plot(days, daily["transactions"].to_numpy(), color=LEGIT_COLOR, linewidth=2)
     rate.plot(days, 100 * daily["fraud_rate"].to_numpy(), color=FRAUD_COLOR, linewidth=2)
-    _style(volume, "Transactions per day")
-    _style(rate, "Fraud rate per day")
-    _percent_axis(rate, digits=1)
-    _count_axis(volume)
+    style_axes(volume, "Transactions per day")
+    style_axes(rate, "Fraud rate per day")
+    percent_axis(rate, digits=1)
+    count_axis(volume)
     # Headroom above the data keeps the window names below clear of the line.
     volume.set_ylim(0, 1.3 * _f(daily["transactions"].max()))
     rate.set_ylim(bottom=0)
@@ -300,7 +278,7 @@ def plot_hourly(labelled: pl.DataFrame, path: Path) -> None:
         .sort("hour")
     )
     hours = hourly["hour"].to_numpy()
-    fig = _figure(9, 5)
+    fig = new_figure(9, 5)
     volume, rate = fig.subplots(2, 1, sharex=True)
     volume.bar(hours, hourly["transactions"].to_numpy(), width=0.5, color=LEGIT_COLOR)
     rate.plot(
@@ -313,10 +291,10 @@ def plot_hourly(labelled: pl.DataFrame, path: Path) -> None:
         markeredgecolor=SURFACE,
         markeredgewidth=2,
     )
-    _style(volume, "Transactions by hour of day (UTC as mapped)")
-    _count_axis(volume)
-    _style(rate, "Fraud rate by hour of day")
-    _percent_axis(rate, digits=1)
+    style_axes(volume, "Transactions by hour of day (UTC as mapped)")
+    count_axis(volume)
+    style_axes(rate, "Fraud rate by hour of day")
+    percent_axis(rate, digits=1)
     rate.set_ylim(bottom=0)
     rate.set_xticks(range(0, 24, 3))
     rate.set_xlabel("Hour", color=INK_SECONDARY, fontsize=9)

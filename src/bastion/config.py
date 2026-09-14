@@ -30,7 +30,8 @@ class Settings(BaseSettings):
 
     redis_url: str = "redis://localhost:6379/0"
     kafka_bootstrap: str = "localhost:19092"
-    mlflow_tracking_uri: str = "http://localhost:5000"
+    # Local sqlite tracking by default; docker compose points containers at http://mlflow:5000.
+    mlflow_tracking_uri: str = "sqlite:///mlruns/mlflow.db"
 
     log_level: str = "INFO"
     log_json: bool = False
