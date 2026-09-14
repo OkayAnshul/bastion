@@ -1,0 +1,22 @@
+# Temporal split (ADR-007). Windows are [start_day, end_day) offsets from the first calendar day
+# (UTC) in the event table. Never shuffled. Contiguous, in this order.
+#
+# ARCHITECTURE.md describes a 12-week dataset (train 1-8 / val 9 / test 10-12). IEEE-CIS spans
+# about six months, so the same shape is applied proportionally. The maturity gap is excluded
+# because, at the training cutoff, those transactions' chargebacks would not have arrived yet.
+windows:
+  - name: train
+    start_day: 0
+    end_day: 98
+  - name: maturity_gap
+    start_day: 98
+    end_day: 112
+  - name: early_stopping
+    start_day: 112
+    end_day: 133
+  - name: calibration
+    start_day: 133
+    end_day: 154
+  - name: test
+    start_day: 154
+    end_day: null   # through the last event
