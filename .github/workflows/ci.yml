@@ -1,0 +1,48 @@
+name: ci
+
+on:
+  push:
+    branches: [main]
+  pull_request:
+
+concurrency:
+  group: ci-${{ github.ref }}
+  cancel-in-progress: true
+
+jobs:
+  lint-and-unit:
+    runs-on: ubuntu-latest
+    steps:
+      - uses: actions/checkout@v7
+      - uses: astral-sh/setup-uv@v10
+        with:
+          python-version: "3.12"
+          enable-cache: true
+      - name: Install dependencies (locked)
+        run: uv sync --frozen
+      - name: Lint and type-check
+        run: make lint
+      - name: Unit tests
+        run: make test
+
+  # Proves a fresh clone's infrastructure actually boots and reports healthy.
+  compose-smoke:
+    runs-on: ubuntu-latest
+    steps:
+      - uses: actions/checkout@v7
+      - name: Validate compose file
+        run: docker compose config --quiet
+      - name: Build the application image
+        run: docker compose --profile tools build app
+      - name: Smoke-test the application image
+        run: docker compose --profile tools run --rm --no-deps app info
+      - name: Start infrastructure and wait for health
+        run: docker compose up -d --wait --wait-timeout 240
+      - name: Service state
+        if: always()
+        run: |
+          docker compose ps -a
+          docker compose logs --tail=40
+      - name: Tear down
+        if: always()
+        run: docker compose down -v

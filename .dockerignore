@@ -1,0 +1,15 @@
+.git
+.venv
+.env
+data
+artifacts
+mlruns
+mlartifacts
+profiles
+**/__pycache__
+.pytest_cache
+.mypy_cache
+.ruff_cache
+.hypothesis
+tests
+docs

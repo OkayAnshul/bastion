@@ -1,0 +1,96 @@
+name: bastion
+
+# Application services share one image; each sets its own command.
+x-bastion-app: &bastion-app
+  build: .
+  image: bastion:dev
+  env_file:
+    - path: .env
+      required: false
+  environment:
+    BASTION_REDIS_URL: redis://redis:6379/0
+    BASTION_KAFKA_BOOTSTRAP: redpanda:9092
+    BASTION_MLFLOW_TRACKING_URI: http://mlflow:5000
+  volumes:
+    - ./data:/app/data
+    - ./artifacts:/app/artifacts
+    - ./docs/results:/app/docs/results
+
+services:
+  # Kafka-API-compatible broker (ADR-001). Two listeners: `redpanda:9092` for containers,
+  # `localhost:19092` for code running on the host.
+  redpanda:
+    image: redpandadata/redpanda:v26.2.2
+    command:
+      - redpanda
+      - start
+      - --mode=dev-container
+      - --smp=1
+      - --memory=1G
+      - --kafka-addr=internal://0.0.0.0:9092,external://0.0.0.0:19092
+      - --advertise-kafka-addr=internal://redpanda:9092,external://localhost:19092
+    ports:
+      - "19092:19092"
+      - "9644:9644"
+    volumes:
+      - redpanda-data:/var/lib/redpanda/data
+    healthcheck:
+      test: ["CMD-SHELL", "rpk cluster health | grep -E 'Healthy:.+true' || exit 1"]
+      interval: 5s
+      timeout: 5s
+      retries: 30
+      start_period: 10s
+
+  # Online feature store. `noeviction` makes a full store fail writes loudly: silently
+  # evicting feature state would skew features without any error.
+  redis:
+    image: redis:8.6.6-alpine
+    command: ["redis-server", "--save", "", "--appendonly", "no",
+              "--maxmemory", "2gb", "--maxmemory-policy", "noeviction"]
+    ports:
+      - "6379:6379"
+    healthcheck:
+      test: ["CMD", "redis-cli", "ping"]
+      interval: 5s
+      timeout: 3s
+      retries: 20
+
+  # Experiment tracking + model registry. Clients upload artifacts over HTTP
+  # (--serve-artifacts), so no shared volume is needed between containers.
+  mlflow:
+    image: ghcr.io/mlflow/mlflow:v3.16.0
+    command:
+      - mlflow
+      - server
+      - --host=0.0.0.0
+      - --port=5000
+      - --backend-store-uri=sqlite:////mlflow/mlflow.db
+      - --artifacts-destination=/mlflow/artifacts
+      - --serve-artifacts
+      - --allowed-hosts=localhost,localhost:5000,127.0.0.1:5000,mlflow,mlflow:5000
+    ports:
+      - "5000:5000"
+    volumes:
+      - mlflow-data:/mlflow
+    healthcheck:
+      test: ["CMD", "python", "-c", "import urllib.request; urllib.request.urlopen('http://localhost:5000/health')"]
+      interval: 10s
+      timeout: 5s
+      retries: 20
+      start_period: 15s
+
+  # One-off CLI runs inside the stack, e.g. `docker compose run --rm app info`.
+  app:
+    <<: *bastion-app
+    profiles: ["tools"]
+    depends_on:
+      redpanda:
+        condition: service_healthy
+      redis:
+        condition: service_healthy
+      mlflow:
+        condition: service_healthy
+
+volumes:
+  redpanda-data:
+  mlflow-data:
