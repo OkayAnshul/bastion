@@ -1,0 +1,24 @@
+# Streaming path (Phase 2): topics, the feature builder's consumer group, and the online store.
+
+topics:
+  # Keyed by card_id: every event for one card lands on one partition, in order (ARCHITECTURE.md §2).
+  transactions:
+    name: transactions.raw
+    partitions: 6
+  labels:
+    name: transactions.labels
+    partitions: 6
+
+consumer_group: bastion-feature-builder
+
+online_store:
+  prefix: bastion
+  # Drop per-entity events older than the longest window that reads them (30 days for cards,
+  # 7 days for devices). Parity checks that read old history as of the past switch this off.
+  trim_history: true
+  # History keys expire this long after the longest window, measured on the wall clock: a memory
+  # safety net for entities that go quiet, not the mechanism that enforces event-time windows.
+  history_ttl_slack_days: 2
+  # First-seen maps and label history. An entity inactive for longer than this is forgotten, and its
+  # online age and familiarity features then differ from a batch recomputation over all history.
+  lifetime_ttl_days: 400

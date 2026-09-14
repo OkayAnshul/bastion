@@ -6,6 +6,7 @@ readme = "README.md"
 requires-python = ">=3.12,<3.13"
 authors = [{ name = "OkayAnshul" }]
 dependencies = [
+    "confluent-kafka>=2.8",
     "lightgbm>=4.5",
     "matplotlib>=3.10",
     "mlflow>=3.1",
@@ -15,6 +16,7 @@ dependencies = [
     "pydantic>=2.11",
     "pydantic-settings>=2.9",
     "pyyaml>=6.0.2",
+    "redis>=5.2",
     "scikit-learn>=1.6",
     "structlog>=25.1",
     "typer>=0.15",
@@ -29,6 +31,7 @@ bastion = "bastion.cli:app"
 
 [dependency-groups]
 dev = [
+    "fakeredis>=2.26",
     "hypothesis>=6.130",
     "mypy>=1.15",
     "pre-commit>=4.2",
@@ -60,7 +63,7 @@ strict = true
 warn_unreachable = true
 
 [[tool.mypy.overrides]]
-module = ["sklearn.*", "kaggle.*", "pyarrow.*", "lightgbm.*", "mlflow.*"]
+module = ["sklearn.*", "kaggle.*", "pyarrow.*", "lightgbm.*", "mlflow.*", "confluent_kafka.*"]
 ignore_missing_imports = true
 
 [tool.pytest.ini_options]
