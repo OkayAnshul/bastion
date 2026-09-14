@@ -8,11 +8,11 @@ from bastion.features.batch import compute_features
 from bastion.streaming.synthetic import IP_PREFIX, SyntheticConfig, generate
 
 SMALL = SyntheticConfig(
-    days=7,
-    n_cards=200,
+    days=14,
+    n_cards=300,
     n_merchants=40,
-    card_testing_attacks_per_day=2.0,
-    account_takeovers_per_day=2.0,
+    card_testing_attacks_per_day=3.0,
+    account_takeovers_per_day=3.0,
 )
 
 
@@ -58,6 +58,26 @@ def test_entity_ids_do_not_reveal_the_label(events: pl.DataFrame) -> None:
     ]:
         ids = events[column].drop_nulls()
         assert ids.str.contains(pattern).all(), column
+
+
+def test_legitimate_devices_can_be_shared_between_cards(events: pl.DataFrame) -> None:
+    # Regression: when only attackers shared devices, "device used by two cards" was a perfect
+    # fraud flag and the model learned the generator instead of behaviour.
+    shared = (
+        events.filter(~pl.col("is_fraud") & pl.col("device_id").is_not_null())
+        .group_by("device_id")
+        .agg(pl.col("card_id").n_unique().alias("cards"))
+        .filter(pl.col("cards") > 1)
+    )
+    assert shared.height > 0
+
+
+def test_some_fraud_uses_a_device_the_card_already_uses(events: pl.DataFrame) -> None:
+    legit_pairs = events.filter(~pl.col("is_fraud")).select("card_id", "device_id").unique()
+    fraud_on_known_device = events.filter(pl.col("is_fraud")).join(
+        legit_pairs, on=["card_id", "device_id"], how="semi"
+    )
+    assert fraud_on_known_device.height > 0
 
 
 def test_fraud_patterns_are_behavioural(events: pl.DataFrame) -> None:

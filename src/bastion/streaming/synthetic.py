@@ -4,6 +4,11 @@ Why this exists: CI cannot download IEEE-CIS, the batch/stream parity test needs
 log with real entity ids, and Phase 6 needs attacks injected on demand. The generator writes the
 same canonical event table as the IEEE-CIS adapter.
 
+Legitimate behaviour deliberately overlaps with fraud: households share devices, people make
+bursts of quick purchases, and small amounts are normal. Attackers sometimes look ordinary: a
+fresh device, or the victim's own device. The first version had none of this, and a model
+learned "a device used by two cards is fraud" (see docs/learning/mistakes.md).
+
 The fraud patterns are designed by the author. A model that catches them shows the pipeline works;
 it says nothing about catching real fraud.
 """
@@ -47,10 +52,18 @@ class SyntheticConfig(BaseModel):
     n_cards: int = Field(default=1_000, ge=1)
     n_merchants: int = Field(default=200, ge=len(MCC_CODES))
     txns_per_card_per_day: float = Field(default=0.5, gt=0)
+
+    # Legitimate behaviour that resembles fraud.
+    multi_card_household_rate: float = Field(default=0.3, ge=0, le=1)  # households of 2-4 cards
+    legit_bursts_per_card_per_day: float = Field(default=0.01, ge=0)  # 3-6 purchases in minutes
+
+    # Fraud.
     card_testing_attacks_per_day: float = Field(default=1.0, ge=0)
     account_takeovers_per_day: float = Field(default=1.0, ge=0)
-    # A small pool of attacker devices reused across attacks, so fraud rings share infrastructure.
-    attacker_devices: int = Field(default=12, ge=1)
+    attacker_devices: int = Field(default=12, ge=1)  # shared pool: rings reuse infrastructure
+    fresh_attacker_device_rate: float = Field(default=0.4, ge=0, le=1)
+    takeover_on_victim_device_rate: float = Field(default=0.2, ge=0, le=1)
+
     currency: str = Field(default="USD", pattern=r"^[A-Z]{3}$")
 
 
@@ -65,7 +78,7 @@ class _Batch:
     fraud: npt.NDArray[np.bool_]
 
     def within(self, max_seconds: int) -> _Batch:
-        """Drop events at or after ``max_seconds`` (attack bursts can run past the period's end)."""
+        """Drop events at or after ``max_seconds`` (bursts can run past the period's end)."""
         keep = self.seconds < max_seconds
         return _Batch(*(getattr(self, f)[keep] for f in _Batch.__dataclass_fields__))
 
@@ -83,8 +96,14 @@ class _Batch:
 
 @dataclass(frozen=True)
 class _World:
-    """Static entities: card spending scales, favourite merchants, merchant categories."""
+    """Static entities: households, spending scales, favourite merchants, merchant categories.
 
+    Device ids: household ``h`` owns devices ``2h`` and ``2h + 1``; attacker devices come after all
+    household devices. IP index ``h`` is household ``h``'s home connection.
+    """
+
+    household: npt.NDArray[np.int64]  # per card
+    n_households: int
     card_scale: npt.NDArray[np.float64]
     card_merchants: npt.NDArray[np.int64]
     merchant_popularity: npt.NDArray[np.float64]
@@ -93,14 +112,37 @@ class _World:
     cash_out_merchants: npt.NDArray[np.int64]
     card_email: npt.NDArray[np.str_]
 
+    def home_device(
+        self, card: npt.NDArray[np.int64], second: npt.NDArray[np.bool_]
+    ) -> npt.NDArray[np.int64]:
+        return 2 * self.household[card] + second.astype(np.int64)
+
+
+def _households(
+    n_cards: int, rate: float, rng: np.random.Generator
+) -> tuple[npt.NDArray[np.int64], int]:
+    """Group cards into households that share devices and a home connection."""
+    order = rng.permutation(n_cards)
+    household = np.empty(n_cards, dtype=np.int64)
+    count = start = 0
+    while start < n_cards:
+        size = int(rng.integers(2, 5)) if rng.random() < rate else 1
+        household[order[start : start + size]] = count
+        count += 1
+        start += size
+    return household, count
+
 
 def _world(cfg: SyntheticConfig, rng: np.random.Generator) -> _World:
+    household, n_households = _households(cfg.n_cards, cfg.multi_card_household_rate, rng)
     # Every category appears at least once: cycle the codes, then shuffle.
     mcc = rng.permutation(np.resize(np.array(MCC_CODES), cfg.n_merchants))
     rank = rng.permutation(cfg.n_merchants)
     popularity = np.asarray(1.0 / (rank + 1.0) ** 1.1, dtype=np.float64)
     popularity /= popularity.sum()
     return _World(
+        household=household,
+        n_households=n_households,
         card_scale=rng.lognormal(mean=3.5, sigma=0.8, size=cfg.n_cards),
         card_merchants=rng.choice(cfg.n_merchants, size=(cfg.n_cards, 5), p=popularity),
         merchant_popularity=popularity,
@@ -111,52 +153,96 @@ def _world(cfg: SyntheticConfig, rng: np.random.Generator) -> _World:
     )
 
 
-def _legitimate(cfg: SyntheticConfig, world: _World, rng: np.random.Generator) -> _Batch:
-    counts = rng.poisson(cfg.txns_per_card_per_day * cfg.days, size=cfg.n_cards)
-    card = np.repeat(np.arange(cfg.n_cards, dtype=np.int64), counts)
+def _legit_purchases(
+    world: _World,
+    card: npt.NDArray[np.int64],
+    seconds: npt.NDArray[np.int64],
+    rng: np.random.Generator,
+) -> _Batch:
     n = card.size
-    day = rng.integers(0, cfg.days, n)
-    hour = rng.choice(24, size=n, p=HOUR_WEIGHTS / HOUR_WEIGHTS.sum())
-    seconds = day * SECONDS_PER_DAY + hour * 3_600 + rng.integers(0, 3_600, n)
     favourite = world.card_merchants[card, rng.integers(0, world.card_merchants.shape[1], n)]
-    anywhere = rng.choice(cfg.n_merchants, size=n, p=world.merchant_popularity)
+    anywhere = rng.choice(world.merchant_popularity.size, size=n, p=world.merchant_popularity)
     merchant = np.where(rng.random(n) < 0.8, favourite, anywhere)
-    # Each card owns two devices (ids 2*card and 2*card+1); 5% of payments carry no device data.
-    device = np.where(rng.random(n) < 0.05, -1, 2 * card + (rng.random(n) < 0.3))
+    # 5% of payments carry no device data.
+    device = np.where(rng.random(n) < 0.05, -1, world.home_device(card, rng.random(n) < 0.3))
     amount = np.maximum(0.5, np.round(world.card_scale[card] * rng.lognormal(0.0, 0.5, n), 2))
     return _Batch(
         seconds.astype(np.int64),
         card,
         merchant.astype(np.int64),
         device.astype(np.int64),
-        card.copy(),  # home IP index = card index
+        world.household[card],
         amount,
         np.zeros(n, dtype=np.bool_),
     )
 
 
+def _legitimate(cfg: SyntheticConfig, world: _World, rng: np.random.Generator) -> _Batch:
+    counts = rng.poisson(cfg.txns_per_card_per_day * cfg.days, size=cfg.n_cards)
+    card = np.repeat(np.arange(cfg.n_cards, dtype=np.int64), counts)
+    day = rng.integers(0, cfg.days, card.size)
+    hour = rng.choice(24, size=card.size, p=HOUR_WEIGHTS / HOUR_WEIGHTS.sum())
+    seconds = day * SECONDS_PER_DAY + hour * 3_600 + rng.integers(0, 3_600, card.size)
+    return _legit_purchases(world, card, seconds, rng)
+
+
+def _legit_bursts(cfg: SyntheticConfig, world: _World, rng: np.random.Generator) -> _Batch:
+    """Several quick legitimate purchases (a shopping session, a group bill split)."""
+    n_bursts = int(rng.poisson(cfg.legit_bursts_per_card_per_day * cfg.days * cfg.n_cards))
+    sizes = rng.integers(3, 7, n_bursts)
+    card = np.repeat(rng.integers(0, cfg.n_cards, n_bursts), sizes)
+    gaps = np.cumsum(rng.integers(30, 600, card.size))
+    first = np.cumsum(sizes) - sizes
+    offset = gaps - np.repeat(gaps[first], sizes) if n_bursts else gaps
+    start = np.repeat(rng.integers(0, cfg.days * SECONDS_PER_DAY, n_bursts), sizes)
+    return _legit_purchases(world, card, (start + offset).astype(np.int64), rng)
+
+
+class _AttackerInfrastructure:
+    """Hands out attacker devices and IPs: the shared pool (rings) or never-seen fresh ones."""
+
+    def __init__(self, cfg: SyntheticConfig, world: _World, rng: np.random.Generator) -> None:
+        self._device_base = 2 * world.n_households
+        self._pool = cfg.attacker_devices
+        self._fresh_rate = cfg.fresh_attacker_device_rate
+        self._rng = rng
+        self._fresh = 0
+
+    def draw(self) -> tuple[int, int]:
+        if self._rng.random() < self._fresh_rate:
+            index = self._pool + self._fresh
+            self._fresh += 1
+        else:
+            index = int(self._rng.integers(self._pool))
+        return self._device_base + index, _ATTACKER_IP_OFFSET + index
+
+
 def _attack(
-    cfg: SyntheticConfig,
-    rng: np.random.Generator,
     seconds: npt.NDArray[np.int64],
     merchants: npt.NDArray[np.int64],
     amounts: npt.NDArray[np.float64],
     card: int,
+    device: int,
+    ip: int,
 ) -> _Batch:
     k = seconds.size
-    attacker = int(rng.integers(cfg.attacker_devices))
     return _Batch(
         seconds.astype(np.int64),
         np.full(k, card, dtype=np.int64),
         merchants.astype(np.int64),
-        np.full(k, 2 * cfg.n_cards + attacker, dtype=np.int64),
-        np.full(k, _ATTACKER_IP_OFFSET + attacker, dtype=np.int64),
+        np.full(k, device, dtype=np.int64),
+        np.full(k, ip, dtype=np.int64),
         amounts,
         np.ones(k, dtype=np.bool_),
     )
 
 
-def _card_testing(cfg: SyntheticConfig, world: _World, rng: np.random.Generator) -> list[_Batch]:
+def _card_testing(
+    cfg: SyntheticConfig,
+    world: _World,
+    rng: np.random.Generator,
+    attackers: _AttackerInfrastructure,
+) -> list[_Batch]:
     """A stolen card probed with a burst of tiny payments, sometimes followed by a cash-out."""
     attacks = []
     for _ in range(int(rng.poisson(cfg.card_testing_attacks_per_day * cfg.days))):
@@ -173,14 +259,18 @@ def _card_testing(cfg: SyntheticConfig, world: _World, rng: np.random.Generator)
             amounts = np.append(
                 amounts, round(float(world.card_scale[card]) * rng.uniform(10, 30), 2)
             )
-        attacks.append(_attack(cfg, rng, seconds, merchants, amounts, card))
+        device, ip = attackers.draw()
+        attacks.append(_attack(seconds, merchants, amounts, card, device, ip))
     return attacks
 
 
 def _account_takeover(
-    cfg: SyntheticConfig, world: _World, rng: np.random.Generator
+    cfg: SyntheticConfig,
+    world: _World,
+    rng: np.random.Generator,
+    attackers: _AttackerInfrastructure,
 ) -> list[_Batch]:
-    """Several large purchases within hours, from an attacker device, at resellable goods."""
+    """Large, quick purchases of resellable goods; sometimes from the victim's own device."""
     attacks = []
     for _ in range(int(rng.poisson(cfg.account_takeovers_per_day * cfg.days))):
         card = int(rng.integers(cfg.n_cards))
@@ -189,7 +279,11 @@ def _account_takeover(
         seconds = start + np.sort(rng.integers(0, 6 * 3_600, n))
         merchants = rng.choice(world.cash_out_merchants, n)
         amounts = np.round(world.card_scale[card] * rng.uniform(5, 20, n), 2)
-        attacks.append(_attack(cfg, rng, seconds, merchants, amounts, card))
+        if rng.random() < cfg.takeover_on_victim_device_rate:  # malware or a stolen phone
+            device, ip = 2 * int(world.household[card]), int(world.household[card])
+        else:
+            device, ip = attackers.draw()
+        attacks.append(_attack(seconds, merchants, amounts, card, device, ip))
     return attacks
 
 
@@ -202,11 +296,13 @@ def generate(config: SyntheticConfig | None = None) -> pl.DataFrame:
     cfg = config or SyntheticConfig()
     rng = np.random.default_rng(cfg.seed)
     world = _world(cfg, rng)
+    attackers = _AttackerInfrastructure(cfg, world, rng)
     batch = _Batch.concat(
         [
             _legitimate(cfg, world, rng),
-            *_card_testing(cfg, world, rng),
-            *_account_takeover(cfg, world, rng),
+            _legit_bursts(cfg, world, rng),
+            *_card_testing(cfg, world, rng, attackers),
+            *_account_takeover(cfg, world, rng, attackers),
         ]
     ).within(cfg.days * SECONDS_PER_DAY)
 
