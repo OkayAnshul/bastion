@@ -23,15 +23,18 @@ app = typer.Typer(
 )
 data_app = typer.Typer(no_args_is_help=True, help="Dataset download and preparation.")
 baseline_app = typer.Typer(no_args_is_help=True, help="Baselines every model must beat.")
+experiment_app = typer.Typer(no_args_is_help=True, help="Experiments with published results.")
 app.add_typer(data_app, name="data")
 app.add_typer(baseline_app, name="baseline")
+app.add_typer(experiment_app, name="experiment")
 
 EventsOption = Annotated[
     Path | None,
     typer.Option("--events", help="Canonical event table (default: the prepared IEEE-CIS table)."),
 ]
 OutDirOption = Annotated[
-    Path | None, typer.Option("--out-dir", help="Report directory (default: docs/results/phase0).")
+    Path | None,
+    typer.Option("--out-dir", help="Report directory (default: docs/results/<phase>)."),
 ]
 DatasetOption = Annotated[str, typer.Option("--dataset", help="Dataset name shown in reports.")]
 
@@ -61,8 +64,8 @@ def _read_events(path: Path | None, columns: list[str] | None = None) -> tuple[p
     return pl.read_parquet(source, columns=columns), source
 
 
-def _results_dir(out_dir: Path | None) -> Path:
-    return out_dir or get_settings().results_dir / "phase0"
+def _results_dir(out_dir: Path | None, phase: str) -> Path:
+    return out_dir or get_settings().results_dir / phase
 
 
 # ------------------------------------------------------------------------------ data
@@ -122,7 +125,11 @@ def eda(
 
     frame, source = _read_events(events)
     path = write_eda_report(
-        frame, load_split_config(), _results_dir(out_dir), dataset=dataset, source=str(source)
+        frame,
+        load_split_config(),
+        _results_dir(out_dir, "phase0"),
+        dataset=dataset,
+        source=str(source),
     )
     typer.echo(f"wrote {path}")
 
@@ -142,5 +149,74 @@ def baseline_rules(
     frame, source = _read_events(events, columns=list(EVENT_COLUMNS))
     costs = load_cost_model()
     result = run_rules_baseline(frame, load_split_config(), costs, load_rule_config())
-    path = write_report(result, costs, _results_dir(out_dir), dataset=dataset, source=str(source))
+    path = write_report(
+        result, costs, _results_dir(out_dir, "phase0"), dataset=dataset, source=str(source)
+    )
     typer.echo(f"wrote {path}")
+
+
+# ------------------------------------------------------------------------------ phase 1
+
+
+@app.command()
+def train(
+    events: EventsOption = None,
+    out_dir: OutDirOption = None,
+    dataset: DatasetOption = "IEEE-CIS",
+) -> None:
+    """Train, calibrate and evaluate LightGBM on point-in-time features; log it all to MLflow."""
+    from bastion.data.labels import load_label_delay_config
+    from bastion.data.splits import load_split_config
+    from bastion.rules.baseline import load_rule_config
+    from bastion.training.dataset import load_model_config
+    from bastion.training.train import TrainingInputs, train_model
+
+    frame, source = _read_events(events)
+    settings = get_settings()
+    inputs = TrainingInputs(
+        frame,
+        load_split_config(),
+        load_label_delay_config(),
+        load_model_config(),
+        load_rule_config(),
+        dataset,
+        str(source),
+    )
+    result = train_model(
+        inputs,
+        results_dir=_results_dir(out_dir, "phase1"),
+        artifacts_dir=settings.artifacts_dir,
+        tracking_uri=settings.mlflow_tracking_uri,
+    )
+    typer.echo(
+        f"wrote {result.report_path} · MLflow run {result.run_id} · bundle {result.bundle_dir}"
+    )
+
+
+@experiment_app.command("leakage")
+def experiment_leakage(
+    events: EventsOption = None,
+    out_dir: OutDirOption = None,
+    dataset: DatasetOption = "IEEE-CIS",
+) -> None:
+    """Naive vs point-in-time features, shuffled vs temporal split (ADR-003, ADR-007)."""
+    from bastion.data.labels import load_label_delay_config
+    from bastion.data.splits import load_split_config
+    from bastion.training.dataset import load_model_config
+    from bastion.training.experiments.leakage import run_leakage_experiment
+
+    frame, source = _read_events(events)
+    settings = get_settings()
+    results = run_leakage_experiment(
+        frame,
+        load_split_config(),
+        load_label_delay_config(),
+        load_model_config(),
+        dataset=dataset,
+        source=str(source),
+        results_dir=_results_dir(out_dir, "phase1"),
+        artifacts_dir=settings.artifacts_dir,
+        tracking_uri=settings.mlflow_tracking_uri,
+    )
+    for result in results:
+        typer.echo(f"{result.name:22} test PR-AUC {result.pr_auc:.4f}")

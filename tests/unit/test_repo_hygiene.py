@@ -1,5 +1,6 @@
 """Repository hygiene: guards on what the published history can silently miss."""
 
+import re
 import shutil
 import subprocess
 from pathlib import Path
@@ -7,6 +8,8 @@ from pathlib import Path
 import pytest
 
 REPO_ROOT = Path(__file__).resolve().parents[2]
+SRC = REPO_ROOT / "src" / "bastion"
+LEAKAGE_EXPERIMENT = SRC / "training" / "experiments" / "leakage.py"
 
 
 @pytest.mark.skipif(
@@ -39,3 +42,17 @@ def test_no_source_test_or_config_file_is_gitignored() -> None:
         if "__pycache__" not in path and not path.endswith(".pyc")
     ]
     assert ignored == []
+
+
+def test_random_splits_never_appear_outside_the_leakage_experiment() -> None:
+    """ADR-007: `train_test_split(shuffle=True)` in this codebase is a bug.
+
+    The one sanctioned shuffle is the leakage experiment, which exists to measure the damage.
+    """
+    forbidden = re.compile(r"train_test_split|shuffle\s*=\s*True|shuffled_split\(")
+    offenders = [
+        path.relative_to(REPO_ROOT)
+        for path in SRC.rglob("*.py")
+        if path != LEAKAGE_EXPERIMENT and forbidden.search(path.read_text())
+    ]
+    assert offenders == []

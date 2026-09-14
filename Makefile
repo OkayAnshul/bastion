@@ -1,5 +1,5 @@
 .DEFAULT_GOAL := help
-.PHONY: help setup lint format test test-integration test-data up down logs data eda baseline
+.PHONY: help setup lint format test test-integration test-data up down logs data eda baseline train experiment-leakage
 
 UV      ?= uv
 RUN     := $(UV) run
@@ -51,3 +51,10 @@ eda: ## Generate the EDA report into docs/results/phase0/
 
 baseline: ## Evaluate the rules baseline into docs/results/phase0/
 	$(RUN) bastion baseline rules
+
+# ---------------------------------------------------------------- phase 1
+train: ## Train and calibrate LightGBM on point-in-time features (logged to MLflow)
+	$(RUN) bastion train
+
+experiment-leakage: ## Leakage experiment: naive vs point-in-time features, shuffled vs temporal split
+	$(RUN) bastion experiment leakage
