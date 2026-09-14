@@ -22,6 +22,8 @@ COPY pyproject.toml uv.lock README.md ./
 RUN --mount=type=cache,target=/root/.cache/uv uv sync --frozen --no-dev --no-install-project
 COPY src ./src
 RUN --mount=type=cache,target=/root/.cache/uv uv sync --frozen --no-dev
+# Versioned experiment and policy parameters that services read at runtime.
+COPY configs ./configs
 
 # UID 1000 matches the usual host user, so bind-mounted data/ stays writable.
 RUN useradd --create-home --uid 1000 bastion

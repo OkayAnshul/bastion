@@ -1,0 +1,22 @@
+# Rules baseline (Phase 0).
+#
+# The quantile LEVELS below are hand-chosen. The thresholds they imply are computed from legitimate
+# transactions in the train window only, then frozen and applied unchanged to later windows. That
+# way no threshold is a magic number, and none is tuned on evaluation data.
+
+# high_amount: amount above this quantile of legitimate train amounts.
+high_amount_quantile: 0.99
+
+# velocity_1h: more card transactions in the previous hour than this quantile of legitimate traffic.
+velocity_1h_quantile: 0.995
+
+# new_device_high_amount: device never used by this card before, and amount above this quantile.
+new_device_amount_quantile: 0.90
+
+# no_history_high_amount: no card transactions in the previous 7 days, and amount above this quantile.
+no_history_amount_quantile: 0.95
+
+# amount_spike: at least `spike_min_history` card transactions in the previous 7 days, and an amount
+# more than `spike_multiplier` times their mean.
+spike_multiplier: 5.0
+spike_min_history: 3
