@@ -4,7 +4,8 @@
 A real-world problem built with production-style engineering on **public (IEEE-CIS) and simulated data**.
 Bastion has never processed real payments, real customers, or real money.
 
-> Status: **Phase 0 — Foundations (in progress).** Every number in this README comes from a
+> Status: **Phases 0–1 code complete and tested on synthetic data; IEEE-CIS results pending the
+> dataset download. Phase 2 (streaming) in progress.** Every number in this README comes from a
 > run recorded in `docs/results/`. Anything not yet measured says **unmeasured**; anything not yet
 > built says **planned**.
 
@@ -53,7 +54,7 @@ Full design, component contracts, latency budget and ADRs: [`docs/ARCHITECTURE.m
 | Phase | Scope | Status |
 |---|---|---|
 | 0 | Scaffold, data contracts, EDA, rules baseline | code complete; IEEE-CIS results pending dataset download |
-| 1 | Temporal validation, point-in-time features, leakage experiment, calibration | planned |
+| 1 | Temporal validation, point-in-time features, leakage experiment, calibration | code complete; IEEE-CIS results pending dataset download |
 | 2 | Streaming replay, Redpanda, Redis online features, batch/stream parity test | planned |
 | 3 | FastAPI scoring service, latency benchmark | planned |
 | 4 | Expected-loss policy engine, analyst console | planned |
@@ -88,6 +89,8 @@ make up         # Redpanda, Redis, MLflow
 make data       # download IEEE-CIS + build the canonical event table
 make eda        # EDA report → docs/results/phase0/
 make baseline   # rules baseline → docs/results/phase0/
+make train      # LightGBM + calibration → docs/results/phase1/ (tracked in MLflow)
+make experiment-leakage   # naive vs point-in-time features → docs/results/phase1/
 ```
 
 Run `make help` for all targets.
@@ -101,6 +104,8 @@ Phase 0 command runs end to end without a Kaggle account:
 uv run bastion data synthetic --out artifacts/demo/events.parquet
 uv run bastion eda --events artifacts/demo/events.parquet --out-dir artifacts/demo --dataset synthetic
 uv run bastion baseline rules --events artifacts/demo/events.parquet --out-dir artifacts/demo --dataset synthetic
+uv run bastion train --events artifacts/demo/events.parquet --out-dir artifacts/demo --dataset synthetic
+uv run bastion experiment leakage --events artifacts/demo/events.parquet --out-dir artifacts/demo --dataset synthetic
 ```
 
 Synthetic results show that the pipeline works. They are not benchmark results: the fraud patterns
