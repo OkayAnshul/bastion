@@ -243,3 +243,7 @@ conflict between this document and reality.
 - **Retraining trigger** *(Phase 6, planned).* A Python job invoked by the monitor, not an orchestrator
   DAG. One pipeline does not justify Airflow.
 - **Offline store.** Parquet on local disk; no MinIO.
+- **Phase gate vs. data access.** ROADMAP says no phase starts before the previous phase's exit
+  criteria are met. Phase 0's exit numbers need IEEE-CIS, and the download needs the owner's Kaggle
+  token. While that is pending, Phase 1 *code* is built and tested on synthetic data. No Phase 1
+  result is reported, and no release is tagged, until the Phase 0 numbers exist.

@@ -52,7 +52,7 @@ Full design, component contracts, latency budget and ADRs: [`docs/ARCHITECTURE.m
 
 | Phase | Scope | Status |
 |---|---|---|
-| 0 | Scaffold, data contracts, EDA, rules baseline | in progress |
+| 0 | Scaffold, data contracts, EDA, rules baseline | code complete; IEEE-CIS results pending dataset download |
 | 1 | Temporal validation, point-in-time features, leakage experiment, calibration | planned |
 | 2 | Streaming replay, Redpanda, Redis online features, batch/stream parity test | planned |
 | 3 | FastAPI scoring service, latency benchmark | planned |
@@ -91,6 +91,20 @@ make baseline   # rules baseline → docs/results/phase0/
 ```
 
 Run `make help` for all targets.
+
+### Try the pipeline without Kaggle
+
+The synthetic generator writes the same canonical event table as the IEEE-CIS adapter, so every
+Phase 0 command runs end to end without a Kaggle account:
+
+```bash
+uv run bastion data synthetic --out artifacts/demo/events.parquet
+uv run bastion eda --events artifacts/demo/events.parquet --out-dir artifacts/demo --dataset synthetic
+uv run bastion baseline rules --events artifacts/demo/events.parquet --out-dir artifacts/demo --dataset synthetic
+```
+
+Synthetic results show that the pipeline works. They are not benchmark results: the fraud patterns
+were written by the author, so they are easier to catch than real fraud.
 
 ## Data
 
