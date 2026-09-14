@@ -1,0 +1,13 @@
+# Simulated label arrival (ADR-003, ADR-007).
+#
+# ASSUMPTIONS: IEEE-CIS records whether a transaction was fraud, not when that became known. Real
+# chargebacks can take months; this compresses the timeline to fit a six-month dataset.
+seed: 11
+
+# A fraud label arrives after a lognormal chargeback delay with this median (days) and shape.
+fraud_median_days: 5.0
+fraud_sigma: 0.6
+
+# After this many days with no chargeback, a transaction counts as legitimate. Fraud delays are capped
+# here too. Must not exceed the maturity gap in splits.yaml (a unit test checks this).
+maturity_days: 14.0
