@@ -40,4 +40,5 @@ scraping real payment data · LLM-based fraud decisions · tools added only for 
 See `make help`. Python 3.12 is managed by uv (`uv sync`); services run through Docker Compose.
 
 ## Current phase
-0 — Foundations.
+4 — Policy engine and analyst console. Phases 0–1 are code-complete; their IEEE-CIS
+results wait for the dataset download.

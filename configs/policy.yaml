@@ -1,0 +1,25 @@
+# Decision policy (ADR-005): approve, review or block from a calibrated fraud probability, the amount
+# and the assumed costs in costs.yaml, under a daily human-review budget.
+
+# Reviews the analyst team can handle per event-time UTC day. The scoring service enforces it as a
+# hard cap, and offline evaluation simulates the same cap in event order.
+reviews_per_day: 200
+
+# Budgets evaluated by `bastion policy sweep`.
+review_budget_sweep: [0, 5, 10, 20, 50, 100, 200, 500]
+
+# Candidate review thresholds tried per budget when tuning (quantiles of the review benefit).
+threshold_candidates: 200
+
+# Hard rules applied before the model's decision. Precedence: blocklists, then the allowlist, then
+# the velocity cap (see bastion.policy.overrides).
+overrides:
+  blocked_card_ids: []
+  blocked_device_ids: []
+  blocked_merchant_ids: []
+  allowed_card_ids: []
+  # Block a card that already made this many transactions in the previous hour (null disables it).
+  velocity_cap_1h: 30
+
+# Reason codes attached to reviewed and blocked transactions.
+reason_codes_top_k: 3

@@ -60,6 +60,14 @@ class ModelBundle:
         """
         return np.asarray(self._booster.predict(x, num_threads=1), dtype=np.float64)
 
+    def contributions_from_matrix(self, x: npt.NDArray[np.float32]) -> npt.NDArray[np.float64]:
+        """TreeSHAP contribution of each input to the raw margin (log-odds); the bias is last.
+
+        One row per input row, ``len(spec.columns) + 1`` columns, summing to the margin.
+        """
+        contributions = self._booster.predict(x, pred_contrib=True, num_threads=1)
+        return np.asarray(contributions, dtype=np.float64)
+
     def predict_proba(self, frame: pl.DataFrame) -> npt.NDArray[np.float64]:
         """Calibrated fraud probabilities (ADR-006): the only scores the policy engine may use."""
         return self.calibrator.predict(self.raw_scores(frame))

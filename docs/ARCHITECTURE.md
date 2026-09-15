@@ -283,6 +283,16 @@ conflict between this document and reality.
   without a traceback, and counts it as `store_errors` in `GET /v1/model`. What the payment flow does
   after a 503 (fall back to rules, approve under a limit, or decline) is a Phase 4 policy decision.
   The service never returns a score computed without its features.
+- **Policy thresholds (ADR-005).** ADR-005 names two probability thresholds, τ_review and τ_block.
+  Bastion decides on expected costs instead. For each transaction it compares the expected cost of
+  approving (p·a), reviewing (r + p·(1-c)·a) and blocking ((1-p)·(m·a + f)), so the amount matters:
+  a doubtful 5,000 USD payment and a doubtful 5 USD payment no longer get the same action. One
+  threshold remains. A transaction is reviewed only when a review is expected to save more than τ
+  over the better of approving and blocking, and only while its UTC day still has review capacity
+  (the day's first N such transactions, in event order). τ is tuned per budget on the calibration
+  window by total expected cost, which needs no labels. The two-threshold probability policy is kept
+  as the baseline, tuned on the same objective and budget. Overrides (blocklists, an allowlist, an
+  hourly velocity cap) run first and never use review capacity.
 - **Raw event sink** *(deferred to Phase 6).* The Parquet sink that turns the stream into an offline
   store is built with the retraining loop, which is its first consumer. Until then, training reads
   the prepared event table directly.
