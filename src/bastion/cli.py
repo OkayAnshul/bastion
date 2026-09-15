@@ -29,10 +29,12 @@ experiment_app = typer.Typer(no_args_is_help=True, help="Experiments with publis
 stream_app = typer.Typer(
     no_args_is_help=True, help="Streaming path: topics, replay, feature builder."
 )
+bench_app = typer.Typer(no_args_is_help=True, help="Benchmarks with published results.")
 app.add_typer(data_app, name="data")
 app.add_typer(baseline_app, name="baseline")
 app.add_typer(experiment_app, name="experiment")
 app.add_typer(stream_app, name="stream")
+app.add_typer(bench_app, name="bench")
 
 EventsOption = Annotated[
     Path | None,
@@ -343,3 +345,146 @@ def serve(
         workers=workers,
         log_level="warning",
     )
+
+
+@bench_app.command("prepare")
+def bench_prepare(
+    events: EventsOption = None,
+    payloads: Annotated[Path, typer.Option(help="Where to write request payloads.")] = Path(
+        "artifacts/bench/payloads.json"
+    ),
+    request_share: Annotated[float, typer.Option(help="Share of events kept as requests.")] = 0.1,
+    max_requests: Annotated[int, typer.Option(help="Cap on request payloads.")] = 20_000,
+) -> None:
+    """Load the online store with an event table's history; write its tail as request payloads."""
+    import json
+    import time
+
+    from bastion.benchmarks.latency import prepare_benchmark
+    from bastion.data.labels import load_label_delay_config
+
+    frame, source = _read_events(events)
+    started = time.perf_counter()
+    history, labels, requests = prepare_benchmark(
+        frame,
+        _online_store(),
+        load_label_delay_config(),
+        request_share=request_share,
+        max_requests=max_requests,
+    )
+    seconds = time.perf_counter() - started
+    payloads.parent.mkdir(parents=True, exist_ok=True)
+    payloads.write_text(json.dumps(requests))
+    meta = {
+        "source": str(source),
+        "history_events": history,
+        "history_labels": labels,
+        "requests": len(requests),
+        "ingest_seconds": round(seconds, 1),
+    }
+    payloads.with_suffix(".meta.json").write_text(json.dumps(meta, indent=2) + "\n")
+    typer.echo(
+        f"ingested {history:,} events and {labels:,} labels in {seconds:.1f} s;"
+        f" wrote {len(requests):,} payloads to {payloads}"
+    )
+
+
+@bench_app.command("latency")
+def bench_latency(
+    target: Annotated[
+        str, typer.Option(help="Scoring service base URL.")
+    ] = "http://127.0.0.1:8000",
+    payloads: Annotated[Path, typer.Option(help="Request payloads from `bench prepare`.")] = Path(
+        "artifacts/bench/payloads.json"
+    ),
+    rates: Annotated[str, typer.Option(help="Comma-separated arrival rates (req/s).")] = (
+        "25,50,100,200,400,800"
+    ),
+    duration: Annotated[int, typer.Option(help="Seconds per rate.")] = 30,
+    warmup: Annotated[int, typer.Option(help="Warm-up seconds before measuring.")] = 10,
+    workers: Annotated[int, typer.Option(help="Service worker processes (for the report).")] = 1,
+    out_dir: OutDirOption = None,
+) -> None:
+    """Load the running service with k6 at each arrival rate and write the latency report."""
+    import json
+    import urllib.request
+
+    from bastion.benchmarks.latency import (
+        K6_IMAGE,
+        hardware_description,
+        run_latency_benchmark,
+        write_latency_report,
+    )
+
+    with urllib.request.urlopen(f"{target}/v1/model", timeout=5) as response:
+        model = json.load(response)
+    meta_path = payloads.with_suffix(".meta.json")
+    meta = json.loads(meta_path.read_text()) if meta_path.exists() else {}
+    results_dir = _results_dir(out_dir, "phase3")
+    results = run_latency_benchmark(
+        target=target,
+        payloads=payloads,
+        decision_log=get_settings().decision_log_path,
+        rates=[int(r) for r in rates.split(",")],
+        duration_s=duration,
+        warmup_s=warmup,
+        out_dir=results_dir,
+    )
+    history = (
+        f"{meta['history_events']:,} events and {meta['history_labels']:,} labels"
+        if meta
+        else "unknown"
+    )
+    setup = {
+        "Service": f"`bastion serve`, {workers} worker process(es), JSONL decision log",
+        "Model": f"{model['model_version']} ({model['inputs']} inputs), synthetic training data",
+        "Online store": "Redis 8.6.6 in a rootless Podman container, host network",
+        "History in Redis": history,
+        "Requests": f"{meta['requests']:,} synthetic payloads, cycled" if meta else "unknown",
+        "Load generator": f"k6 ({K6_IMAGE}) in a container, host network, constant arrival rate",
+        "Per rate": f"{duration} s, after one {warmup} s warm-up run",
+    }
+    path = write_latency_report(results, results_dir, setup=setup, hardware=hardware_description())
+    for r in results:
+        typer.echo(
+            f"{r.target_rps:>5} rps  p50 {r.client_ms['med']:7.2f} ms"
+            f"  p99 {r.client_ms['p(99)']:7.2f} ms  sustained={r.sustained}"
+        )
+    typer.echo(f"wrote {path}")
+
+
+@bench_app.command("report")
+def bench_report(
+    out_dir: Annotated[
+        Path, typer.Argument(help="Directory with latency.json and raw/ from `bench latency`.")
+    ],
+) -> None:
+    """Re-render a recorded latency report and its figures; the numbers are not re-measured."""
+    from bastion.benchmarks.latency import rebuild_latency_report
+
+    typer.echo(f"wrote {rebuild_latency_report(out_dir)}")
+
+
+@bench_app.command("profile")
+def bench_profile(
+    profile: Annotated[Path, typer.Argument(help="py-spy profile recorded with --format raw.")],
+    rate_hz: Annotated[float, typer.Option(help="Sampling rate passed to py-spy --rate.")] = 100.0,
+    requests: Annotated[
+        int | None, typer.Option(help="Requests served while profiling (adds ms/request).")
+    ] = None,
+    top: Annotated[int, typer.Option(help="Hottest leaf frames to list.")] = 8,
+) -> None:
+    """Summarise a py-spy profile of the scoring service by stage."""
+    from bastion.benchmarks.profiling import summarize_profile
+
+    summary = summarize_profile(profile, top=top)
+    typer.echo(f"{summary.samples:,} samples")
+    for stage in summary.stage_samples:
+        line = f"{stage:<24} {100 * summary.share(stage):5.1f}%"
+        if requests:
+            busy = summary.ms_per_request(stage, rate_hz=rate_hz, requests=requests)
+            line += f"  {busy:6.3f} ms/request"
+        typer.echo(line)
+    typer.echo("hottest leaf frames:")
+    for frame, count in summary.leaves:
+        typer.echo(f"{100 * count / summary.samples:5.1f}%  {frame}")

@@ -39,6 +39,8 @@ kaggle.json
 *.sqlite3
 *.parquet
 !tests/fixtures/**/*.parquet
+# Per-request benchmark samples (tens of MB); reports and summaries stay tracked.
+docs/results/**/raw/
 
 # --- OS / editors ---
 .DS_Store

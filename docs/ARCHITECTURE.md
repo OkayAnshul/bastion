@@ -266,6 +266,14 @@ conflict between this document and reality.
   devices); key TTLs are only a wall-clock safety net for entities that go quiet. An entity idle for
   longer than the lifetime TTL (400 days) is forgotten, and its online age and familiarity features
   would then differ from a batch recomputation.
+- **Latency measurement (§3.3).** `bastion bench latency` drives `POST /v1/score` with k6's
+  `constant-arrival-rate` executor (an open load model, so a slow service does not receive less load)
+  and joins k6's client-side samples with the service's per-stage timings from its decision log. A
+  rate counts as sustained only if no request was dropped or failed and the achieved rate stayed
+  within 2% of the target. The "Redis" stage runs until the pipeline's replies have been processed,
+  so it includes time spent waiting for the single event loop. Client, service and Redis share one
+  laptop, and every report states the machine. `bastion bench report` re-renders a recorded run's
+  report and figures without re-measuring anything, keeping the git revision it was measured at.
 - **Raw event sink** *(deferred to Phase 6).* The Parquet sink that turns the stream into an offline
   store is built with the retraining loop, which is its first consumer. Until then, training reads
   the prepared event table directly.

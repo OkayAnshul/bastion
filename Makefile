@@ -1,5 +1,6 @@
 .DEFAULT_GOAL := help
-.PHONY: help setup lint format test test-integration test-data up down logs data eda baseline train experiment-leakage
+.PHONY: help setup lint format test test-integration test-data up down logs data eda baseline train \
+	experiment-leakage serve bench-prepare bench
 
 UV      ?= uv
 RUN     := $(UV) run
@@ -58,3 +59,13 @@ train: ## Train and calibrate LightGBM on point-in-time features (logged to MLfl
 
 experiment-leakage: ## Leakage experiment: naive vs point-in-time features, shuffled vs temporal split
 	$(RUN) bastion experiment leakage
+
+# ---------------------------------------------------------------- phase 3
+serve: ## Scoring service on :8000 (model from BASTION_MODEL_PATH, else the MLflow champion)
+	$(RUN) bastion serve
+
+bench-prepare: ## Load Redis with benchmark history and write request payloads (after make up)
+	$(RUN) bastion bench prepare
+
+bench: ## k6 latency benchmark against a running service into docs/results/phase3/
+	$(RUN) bastion bench latency
