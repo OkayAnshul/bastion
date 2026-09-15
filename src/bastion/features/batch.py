@@ -9,6 +9,7 @@ Feature groups follow ARCHITECTURE.md §3.2: velocity, deviation, entity risk, c
 
 from __future__ import annotations
 
+from collections.abc import Sequence
 from dataclasses import dataclass
 
 import numpy as np
@@ -22,14 +23,14 @@ from bastion.features.definitions import (
     Int64Array,
     WindowAggregate,
     age_days,
-    distinct_in_window,
+    distinct_in_window_many,
     from_milli_units,
     mean_and_std,
     seen_before,
     smoothed_rate,
     to_cents,
     to_milli_units,
-    window_aggregates,
+    window_aggregates_many,
 )
 
 DISTINCT_WINDOWS = ("1h", "24h", "7d")
@@ -166,6 +167,30 @@ def _columns(events: pl.DataFrame) -> _Columns:
     )
 
 
+def _windowed_many(
+    entity: Int64Array,
+    ts: Int64Array,
+    values: Int64Array,
+    windows_ms: Sequence[int],
+    query_entity: Int64Array,
+    query_ts: Int64Array,
+) -> list[WindowAggregate]:
+    """``window_aggregates_many`` over history rows that have an entity (code >= 0).
+
+    Queries without an entity are evaluated as entity 0; the caller must mask them.
+    """
+    valid = entity >= 0
+    order = np.lexsort((ts[valid], entity[valid]))
+    return window_aggregates_many(
+        entity[valid][order],
+        ts[valid][order],
+        values[valid][order],
+        np.maximum(query_entity, 0),
+        query_ts,
+        windows_ms,
+    )
+
+
 def _windowed(
     entity: Int64Array,
     ts: Int64Array,
@@ -174,20 +199,7 @@ def _windowed(
     query_entity: Int64Array,
     query_ts: Int64Array,
 ) -> WindowAggregate:
-    """``window_aggregates`` over history rows that have an entity (code >= 0).
-
-    Queries without an entity are evaluated as entity 0; the caller must mask them.
-    """
-    valid = entity >= 0
-    order = np.lexsort((ts[valid], entity[valid]))
-    return window_aggregates(
-        entity[valid][order],
-        ts[valid][order],
-        values[valid][order],
-        np.maximum(query_entity, 0),
-        query_ts,
-        window_ms,
-    )
+    return _windowed_many(entity, ts, values, [window_ms], query_entity, query_ts)[0]
 
 
 def _masked(values: npt.ArrayLike, valid: npt.NDArray[np.bool_]) -> pl.Series:
@@ -206,21 +218,21 @@ def _float(values: npt.NDArray[np.float64]) -> pl.Series:
 def _card_velocity(c: _Columns) -> dict[str, pl.Series]:
     out: dict[str, pl.Series] = {}
     amount_mu = to_milli_units(c.amount)
-    for name, window_ms in WINDOWS_MS.items():
-        agg = _windowed(c.card, c.ts, amount_mu, window_ms, c.card, c.ts)
+    velocity = _windowed_many(c.card, c.ts, amount_mu, list(WINDOWS_MS.values()), c.card, c.ts)
+    for name, agg in zip(WINDOWS_MS, velocity, strict=True):
         out[f"card_txn_count_{name}"] = pl.Series(agg.count)
         out[f"card_amount_sum_{name}"] = pl.Series(from_milli_units(agg.total))
     has_device = c.device >= 0
-    for name in DISTINCT_WINDOWS:
-        window_ms = WINDOWS_MS[name]
-        out[f"card_distinct_merchants_{name}"] = pl.Series(
-            distinct_in_window(c.card, c.ts, c.merchant, c.card, c.ts, window_ms)
-        )
-        out[f"card_distinct_devices_{name}"] = pl.Series(
-            distinct_in_window(
-                c.card[has_device], c.ts[has_device], c.device[has_device], c.card, c.ts, window_ms
-            )
-        )
+    windows = [WINDOWS_MS[name] for name in DISTINCT_WINDOWS]
+    merchants = distinct_in_window_many(c.card, c.ts, c.merchant, c.card, c.ts, windows)
+    devices = distinct_in_window_many(
+        c.card[has_device], c.ts[has_device], c.device[has_device], c.card, c.ts, windows
+    )
+    for name, merchant_counts, device_counts in zip(
+        DISTINCT_WINDOWS, merchants, devices, strict=True
+    ):
+        out[f"card_distinct_merchants_{name}"] = pl.Series(merchant_counts)
+        out[f"card_distinct_devices_{name}"] = pl.Series(device_counts)
     return out
 
 
@@ -244,19 +256,20 @@ def _device_velocity(c: _Columns) -> dict[str, pl.Series]:
     has_device = c.device >= 0
     ones = np.ones(c.ts.size, dtype=np.int64)
     out: dict[str, pl.Series] = {}
-    for name in DEVICE_COUNT_WINDOWS:
-        agg = _windowed(c.device, c.ts, ones, WINDOWS_MS[name], c.device, c.ts)
+    count_windows = [WINDOWS_MS[name] for name in DEVICE_COUNT_WINDOWS]
+    counts = _windowed_many(c.device, c.ts, ones, count_windows, c.device, c.ts)
+    for name, agg in zip(DEVICE_COUNT_WINDOWS, counts, strict=True):
         out[f"device_txn_count_{name}"] = _masked(agg.count, has_device)
-    for name in DEVICE_DISTINCT_WINDOWS:
-        counts = distinct_in_window(
-            c.device[has_device],
-            c.ts[has_device],
-            c.card[has_device],
-            np.maximum(c.device, 0),
-            c.ts,
-            WINDOWS_MS[name],
-        )
-        out[f"device_distinct_cards_{name}"] = _masked(counts, has_device)
+    cards = distinct_in_window_many(
+        c.device[has_device],
+        c.ts[has_device],
+        c.card[has_device],
+        np.maximum(c.device, 0),
+        c.ts,
+        [WINDOWS_MS[name] for name in DEVICE_DISTINCT_WINDOWS],
+    )
+    for name, card_counts in zip(DEVICE_DISTINCT_WINDOWS, cards, strict=True):
+        out[f"device_distinct_cards_{name}"] = _masked(card_counts, has_device)
     return out
 
 

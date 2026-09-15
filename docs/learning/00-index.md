@@ -16,6 +16,8 @@ behind code that exists in this repository, using numbers measured on this proje
 | [2.2](phase-2/2.2-event-time-vs-processing-time.md) | Event time vs processing time | `bastion.features.online`, `bastion.streaming.replay` | written |
 | [2.3](phase-2/2.3-online-offline-stores-and-skew.md) | Online and offline stores, train/serve skew | `bastion.features.online`, `bastion.features.batch` | written |
 | [2.4](phase-2/2.4-the-parity-test.md) | The parity test | `tests/unit/test_online_features.py`, `tests/integration/test_stream_parity.py` | written; passes in CI |
+| [3.1](phase-3/3.1-what-p99-means.md) | What p99 means and why the mean lies | `bastion.benchmarks.latency`, `benchmarks/k6/score.js` | written |
+| [3.2](phase-3/3.2-where-the-latency-went.md) | Where my 50 ms actually went | `bastion.benchmarks.profiling`, `bastion.features.definitions` | written |
 
 Also:
 

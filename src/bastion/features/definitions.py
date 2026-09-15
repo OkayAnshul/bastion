@@ -17,6 +17,7 @@ Conventions (ADR-003):
 
 from __future__ import annotations
 
+from collections.abc import Sequence
 from dataclasses import dataclass
 from typing import Final
 
@@ -67,6 +68,50 @@ class WindowAggregate:
     total: Int64Array  # sum of the history values inside the window
 
 
+def window_aggregates_many(
+    history_entity: Int64Array,
+    history_ts: Int64Array,
+    history_values: Int64Array,
+    query_entity: Int64Array,
+    query_ts: Int64Array,
+    windows_ms: Sequence[int],
+) -> list[WindowAggregate]:
+    """Count and sum of ``history_values`` in ``[q - w, q)`` per query, for each window ``w``.
+
+    ``history_*`` must be sorted by (entity, ts). In batch, history and queries are the same rows.
+    Online, history is one entity's recent events and the query is the incoming transaction, with
+    entity code 0 for both. The history is keyed, validated and summed once for all windows.
+    Profiling the scoring service showed repeated keying and validation as a large share of feature
+    time when every window was a separate call.
+    """
+    if any(window_ms <= 0 for window_ms in windows_ms):
+        raise ValueError("window lengths must be positive")
+    key = _entity_time_key(history_entity, history_ts)
+    if np.any(key[1:] < key[:-1]):
+        raise ValueError("history must be sorted by (entity, ts)")
+    if history_values.size and float(np.abs(history_values.astype(np.float64)).sum()) >= 2.0**62:
+        raise OverflowError("cumulative sums of history_values would overflow int64")
+
+    query_key = _entity_time_key(query_entity, query_ts)  # validates the queries once
+    query_ms = query_ts.astype(np.int64)
+    block = query_key - query_ms  # the entity part of each query's key
+    upper = np.searchsorted(key, query_key, side="left")  # first event at or after q: excluded
+    cumulative = np.concatenate(
+        (np.zeros(1, dtype=np.int64), np.cumsum(history_values, dtype=np.int64))
+    )
+    results = []
+    for window_ms in windows_ms:
+        # Clamping at 0 keeps the lower bound inside the query's own entity block.
+        lower = np.searchsorted(key, block + np.maximum(query_ms - window_ms, 0), side="left")
+        results.append(
+            WindowAggregate(
+                count=(upper - lower).astype(np.int64),
+                total=(cumulative[upper] - cumulative[lower]).astype(np.int64),
+            )
+        )
+    return results
+
+
 def window_aggregates(
     history_entity: Int64Array,
     history_ts: Int64Array,
@@ -75,34 +120,10 @@ def window_aggregates(
     query_ts: Int64Array,
     window_ms: int,
 ) -> WindowAggregate:
-    """Count and sum of ``history_values`` for each query entity's events in ``[q - window_ms, q)``.
-
-    ``history_*`` must be sorted by (entity, ts). In batch, history and queries are the same rows.
-    Online, history is one entity's recent events and the query is the incoming transaction, with
-    entity code 0 for both.
-    """
-    if window_ms <= 0:
-        raise ValueError("window_ms must be positive")
-    key = _entity_time_key(history_entity, history_ts)
-    if np.any(key[1:] < key[:-1]):
-        raise ValueError("history must be sorted by (entity, ts)")
-    if history_values.size and float(np.abs(history_values.astype(np.float64)).sum()) >= 2.0**62:
-        raise OverflowError("cumulative sums of history_values would overflow int64")
-
-    upper_key = _entity_time_key(query_entity, query_ts)
-    # Clamping at 0 keeps the lower bound inside the query's own entity block.
-    lower_ts = np.maximum(query_ts.astype(np.int64) - window_ms, 0).astype(np.int64)
-    lower_key = _entity_time_key(query_entity, lower_ts)
-
-    upper = np.searchsorted(key, upper_key, side="left")  # first event at or after q: excluded
-    lower = np.searchsorted(key, lower_key, side="left")  # first event at or after q - w: included
-    cumulative = np.concatenate(
-        (np.zeros(1, dtype=np.int64), np.cumsum(history_values, dtype=np.int64))
-    )
-    return WindowAggregate(
-        count=(upper - lower).astype(np.int64),
-        total=(cumulative[upper] - cumulative[lower]).astype(np.int64),
-    )
+    """Count and sum of ``history_values`` per query entity in ``[q - window_ms, q)``."""
+    return window_aggregates_many(
+        history_entity, history_ts, history_values, query_entity, query_ts, [window_ms]
+    )[0]
 
 
 def seen_before(first_seen_ms: Int64Array, query_ts: Int64Array) -> npt.NDArray[np.bool_]:
@@ -129,23 +150,25 @@ def to_cents(amount: npt.ArrayLike) -> Int64Array:
     return np.rint(np.asarray(amount, dtype=np.float64) * CENTS_PER_UNIT).astype(np.int64)
 
 
-def distinct_in_window(
+def distinct_in_window_many(
     history_entity: Int64Array,
     history_ts: Int64Array,
     history_value: Int64Array,
     query_entity: Int64Array,
     query_ts: Int64Array,
-    window_ms: int,
-) -> Int64Array:
-    """Number of distinct ``history_value`` codes per query entity in ``[q - window_ms, q)``.
+    windows_ms: Sequence[int],
+) -> list[Int64Array]:
+    """Number of distinct ``history_value`` codes per query entity in ``[q - w, q)``, per window.
 
     Each occurrence of a value *covers* the query times at which it is that value's latest earlier
-    occurrence and still inside the window: ``q`` in ``(ts, min(next_ts, ts + window_ms)]``. The
-    distinct count at ``q`` is (covers started before ``q``) minus (covers ended before ``q``): two
-    binary searches per query instead of a per-row set. History need not be sorted.
+    occurrence and still inside the window: ``q`` in ``(ts, min(next_ts, ts + w)]``. The distinct
+    count at ``q`` is (covers started before ``q``) minus (covers ended before ``q``): two binary
+    searches per query instead of a per-row set. Sorting, de-duplication and the query keys are
+    shared by all windows; only where each cover ends depends on the window. History need not be
+    sorted.
     """
-    if window_ms <= 0:
-        raise ValueError("window_ms must be positive")
+    if any(window_ms <= 0 for window_ms in windows_ms):
+        raise ValueError("window lengths must be positive")
     order = np.lexsort((history_ts, history_value, history_entity))
     entity = history_entity[order].astype(np.int64)
     value = history_value[order].astype(np.int64)
@@ -160,19 +183,37 @@ def distinct_in_window(
     if ts.size > 1:
         same_key = (entity[1:] == entity[:-1]) & (value[1:] == value[:-1])
         next_ts[:-1] = np.where(same_key, ts[1:], MAX_TIMESTAMP_MS)
-    cover_end = np.minimum(next_ts, np.minimum(ts + window_ms, MAX_TIMESTAMP_MS))
 
-    starts = np.sort(_entity_time_key(entity, ts))
-    ends = np.sort(_entity_time_key(entity, cover_end))
-    at_query = _entity_time_key(query_entity, query_ts)
-    block_start = _entity_time_key(query_entity, np.zeros(query_ts.size, dtype=np.int64))
+    starts = np.sort(_entity_time_key(entity, ts))  # validates the history once
+    at_query = _entity_time_key(query_entity, query_ts)  # validates the queries once
+    block_start = at_query - query_ts.astype(np.int64)
     started = np.searchsorted(starts, at_query, side="left") - np.searchsorted(
         starts, block_start, side="left"
     )
-    ended = np.searchsorted(ends, at_query, side="left") - np.searchsorted(
-        ends, block_start, side="left"
-    )
-    return (started - ended).astype(np.int64)
+    entity_block = entity << _TS_BITS
+    results = []
+    for window_ms in windows_ms:
+        cover_end = np.minimum(next_ts, np.minimum(ts + window_ms, MAX_TIMESTAMP_MS))
+        ends = np.sort(entity_block | cover_end)
+        ended = np.searchsorted(ends, at_query, side="left") - np.searchsorted(
+            ends, block_start, side="left"
+        )
+        results.append((started - ended).astype(np.int64))
+    return results
+
+
+def distinct_in_window(
+    history_entity: Int64Array,
+    history_ts: Int64Array,
+    history_value: Int64Array,
+    query_entity: Int64Array,
+    query_ts: Int64Array,
+    window_ms: int,
+) -> Int64Array:
+    """Number of distinct ``history_value`` codes per query entity in ``[q - window_ms, q)``."""
+    return distinct_in_window_many(
+        history_entity, history_ts, history_value, query_entity, query_ts, [window_ms]
+    )[0]
 
 
 def mean_and_std(

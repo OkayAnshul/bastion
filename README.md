@@ -6,8 +6,8 @@ Bastion has never processed real payments, real customers, or real money.
 
 > Status: **Phases 0–1 code complete and tested on synthetic data; IEEE-CIS results pending the
 > dataset download. Phase 2 complete: batch/stream parity passes in CI against Redpanda and Redis.
-> Phase 3 (scoring service) in progress.** Every number in this README comes from a
-> run recorded in `docs/results/`. Anything not yet measured says **unmeasured**; anything not yet
+> Phase 3 complete: scoring latency measured on a laptop (histogram below).** Every number in this
+> README comes from a run recorded in `docs/results/`. Anything not yet measured says **unmeasured**; anything not yet
 > built says **planned**.
 
 ---
@@ -57,7 +57,7 @@ Full design, component contracts, latency budget and ADRs: [`docs/ARCHITECTURE.m
 | 0 | Scaffold, data contracts, EDA, rules baseline | code complete; IEEE-CIS results pending dataset download |
 | 1 | Temporal validation, point-in-time features, leakage experiment, calibration | code complete; IEEE-CIS results pending dataset download |
 | 2 | Streaming replay, Redpanda, Redis online features, batch/stream parity test | complete: parity passes in CI (exit criterion) |
-| 3 | FastAPI scoring service, latency benchmark | in progress: service built; latency unmeasured |
+| 3 | FastAPI scoring service, latency benchmark | complete: latency histogram measured (exit criterion); slowest component profiled and fixed |
 | 4 | Expected-loss policy engine, analyst console | planned |
 | 5 | Entity graph features (optional GNN) | planned |
 | 6 | Drift detection and retraining loop | planned |
@@ -72,11 +72,30 @@ Full design, component contracts, latency budget and ADRs: [`docs/ARCHITECTURE.m
 | Leakage experiment: naive vs point-in-time PR-AUC | unmeasured |
 | Calibration: Brier score, reliability curve | unmeasured |
 | Batch/stream feature parity | exact equality through Redpanda + Redis in CI (synthetic events; see learning log 2.4) |
-| Scoring latency p50 / p95 / p99, throughput | unmeasured |
+| Scoring latency p50 / p95 / p99, throughput | one worker on a laptop: 400 requests/s sustained at p50 2.31 ms, p95 4.60 ms, p99 6.17 ms; 800 requests/s not sustained ([report](docs/results/phase3/latency.md)) |
 | Fraud value caught vs review budget | unmeasured |
 | Graph feature lift | unmeasured |
 | Drift detection and recovery | unmeasured |
 | Narrative faithfulness | unmeasured |
+
+## Scoring latency
+
+![Client-side latency distribution of POST /v1/score at 400 requests/s](docs/results/phase3/figures/latency_histogram.png)
+
+Measured with k6 at a constant arrival rate against one service worker. k6, the service and Redis
+shared one laptop (Intel i7-1255U), and the payloads and Redis history are synthetic (271,529 events).
+At 400 requests/s, the highest rate sustained with no dropped or failed requests, client-side
+latency was **p50 2.31 ms, p95 4.60 ms, p99 6.17 ms** against a 50 ms p99 budget. At 800 requests/s
+one worker does not keep up. Full report: [`docs/results/phase3/latency.md`](docs/results/phase3/latency.md).
+
+**Slowest component: online feature evaluation.** Profiling the running service under load put 40%
+of samples in feature evaluation and 5% in LightGBM. Most of that feature time went to input
+validation and key building, repeated for every time window. Evaluating all windows in one pass,
+with identical outputs, cut feature evaluation from 0.458 to 0.279 ms per call. p99 at 400
+requests/s fell from 10.4–50.4 ms to 5.7–7.6 ms across four runs of each version. Details:
+[`docs/results/phase3/profiling.md`](docs/results/phase3/profiling.md).
+
+These are single-process laptop numbers, not a production capacity claim.
 
 ## Local setup
 
@@ -93,6 +112,8 @@ make baseline   # rules baseline → docs/results/phase0/
 make train      # LightGBM + calibration → docs/results/phase1/ (tracked in MLflow)
 make experiment-leakage   # naive vs point-in-time features → docs/results/phase1/
 make test-integration     # batch/stream parity through Redpanda + Redis (after make up)
+make serve                # scoring service on :8000 (BASTION_MODEL_PATH or the MLflow champion)
+make bench-prepare && make bench   # k6 latency benchmark → docs/results/phase3/ (needs podman or docker)
 ```
 
 Run `make help` for all targets.
@@ -127,6 +148,7 @@ were written by the author, so they are easier to catch than real fraud.
 configs/        versioned experiment, cost and policy parameters
 docs/           architecture, roadmap, results, learning logs, mistakes log
 src/bastion/    the platform (data, features, training, streaming, serving, policy, ...)
+benchmarks/     k6 load script and the feature-evaluation timing script
 tests/          unit tests; integration tests (need services); data tests (need IEEE-CIS)
 ```
 

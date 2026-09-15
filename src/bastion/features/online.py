@@ -48,7 +48,7 @@ from bastion.features.definitions import (
     NEVER_SEEN_MS,
     WINDOWS_MS,
     age_days,
-    distinct_in_window,
+    distinct_in_window_many,
     from_milli_units,
     mean_and_std,
     seen_before,
@@ -56,6 +56,7 @@ from bastion.features.definitions import (
     to_cents,
     to_milli_units,
     window_aggregates,
+    window_aggregates_many,
 )
 from bastion.schemas.events import LabelEvent, TransactionEvent
 
@@ -286,8 +287,8 @@ def features_from_snapshot(
     entity = np.zeros(ts.size, dtype=np.int64)
     amounts = np.array([row[1] for row in rows], dtype=np.float64)
     amount_mu = to_milli_units(amounts)
-    for name, window_ms in WINDOWS_MS.items():
-        agg = window_aggregates(entity, ts, amount_mu, one, q, window_ms)
+    velocity = window_aggregates_many(entity, ts, amount_mu, one, q, list(WINDOWS_MS.values()))
+    for name, agg in zip(WINDOWS_MS, velocity, strict=True):
         out[f"card_txn_count_{name}"] = int(agg.count[0])
         out[f"card_amount_sum_{name}"] = float(from_milli_units(agg.total)[0])
 
@@ -295,16 +296,16 @@ def features_from_snapshot(
     device_values = [row[3] for row in rows]
     with_device = np.array([d is not None for d in device_values], dtype=np.bool_)
     device_codes = _codes([d for d in device_values if d is not None])
-    for name in DISTINCT_WINDOWS:
-        window_ms = WINDOWS_MS[name]
-        out[f"card_distinct_merchants_{name}"] = int(
-            distinct_in_window(entity, ts, merchant_codes, one, q, window_ms)[0]
-        )
-        out[f"card_distinct_devices_{name}"] = int(
-            distinct_in_window(
-                entity[with_device], ts[with_device], device_codes, one, q, window_ms
-            )[0]
-        )
+    windows = [WINDOWS_MS[name] for name in DISTINCT_WINDOWS]
+    merchants = distinct_in_window_many(entity, ts, merchant_codes, one, q, windows)
+    devices = distinct_in_window_many(
+        entity[with_device], ts[with_device], device_codes, one, q, windows
+    )
+    for name, merchant_count, device_count in zip(
+        DISTINCT_WINDOWS, merchants, devices, strict=True
+    ):
+        out[f"card_distinct_merchants_{name}"] = int(merchant_count[0])
+        out[f"card_distinct_devices_{name}"] = int(device_count[0])
 
     cents = to_cents(amounts)
     first = window_aggregates(entity, ts, cents, one, q, DEVIATION_WINDOW_MS)
@@ -330,15 +331,14 @@ def features_from_snapshot(
         device_entity = np.zeros(device_ts.size, dtype=np.int64)
         card_codes = _codes([json.loads(_decode(m))[1] for m, _ in snapshot.device_events])
         ones = np.ones(device_ts.size, dtype=np.int64)
-        for name in DEVICE_COUNT_WINDOWS:
-            agg = window_aggregates(device_entity, device_ts, ones, one, q, WINDOWS_MS[name])
+        count_windows = [WINDOWS_MS[name] for name in DEVICE_COUNT_WINDOWS]
+        counts = window_aggregates_many(device_entity, device_ts, ones, one, q, count_windows)
+        for name, agg in zip(DEVICE_COUNT_WINDOWS, counts, strict=True):
             out[f"device_txn_count_{name}"] = int(agg.count[0])
-        for name in DEVICE_DISTINCT_WINDOWS:
-            out[f"device_distinct_cards_{name}"] = int(
-                distinct_in_window(device_entity, device_ts, card_codes, one, q, WINDOWS_MS[name])[
-                    0
-                ]
-            )
+        card_windows = [WINDOWS_MS[name] for name in DEVICE_DISTINCT_WINDOWS]
+        cards = distinct_in_window_many(device_entity, device_ts, card_codes, one, q, card_windows)
+        for name, card_count in zip(DEVICE_DISTINCT_WINDOWS, cards, strict=True):
+            out[f"device_distinct_cards_{name}"] = int(card_count[0])
 
     # ---- familiarity
     has_device = snapshot.device_events is not None

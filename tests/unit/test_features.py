@@ -12,9 +12,11 @@ from bastion.features.batch import compute_features, feature_schema
 from bastion.features.definitions import (
     WINDOWS_MS,
     distinct_in_window,
+    distinct_in_window_many,
     from_milli_units,
     to_milli_units,
     window_aggregates,
+    window_aggregates_many,
 )
 
 T0 = datetime(2026, 1, 1, tzinfo=UTC)  # a Thursday
@@ -350,3 +352,29 @@ def test_missing_event_columns_fail_with_a_readable_message() -> None:
     events = _events([("c", 0, 1.0, None)]).drop("merchant_id")
     with pytest.raises(ValueError, match="merchant_id"):
         compute_features(events)
+
+
+@settings(max_examples=100, deadline=None)
+@given(
+    history=history_rows,
+    queries=query_rows,
+    windows=st.lists(st.integers(1, 80), min_size=1, max_size=5),
+)
+def test_multi_window_functions_match_brute_force(
+    history: list[tuple[int, int, int]], queries: list[tuple[int, int]], windows: list[int]
+) -> None:
+    """The profiling fix evaluates every window in one call; each window must still be exact."""
+    ordered = sorted(history, key=lambda r: (r[0], r[2]))
+    h = np.array(ordered, dtype=np.int64).reshape(-1, 3)
+    q = np.array(queries, dtype=np.int64).reshape(-1, 2)
+    values = (h[:, 1] + 1) * 1_000
+    sums = window_aggregates_many(h[:, 0], h[:, 2], values, q[:, 0], q[:, 1], windows)
+    distinct = distinct_in_window_many(h[:, 0], h[:, 2], h[:, 1], q[:, 0], q[:, 1], windows)
+    for window, agg, counts in zip(windows, sums, distinct, strict=True):
+        inside = [
+            [(v, t) for e, v, t in ordered if e == qe and qt - window <= t < qt]
+            for qe, qt in queries
+        ]
+        assert agg.count.tolist() == [len(rows) for rows in inside]
+        assert agg.total.tolist() == [sum((v + 1) * 1_000 for v, _ in rows) for rows in inside]
+        assert counts.tolist() == [len({v for v, _ in rows}) for rows in inside]

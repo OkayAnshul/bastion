@@ -1,0 +1,287 @@
+{
+  "git_revision": "0e24265-dirty",
+  "hardware": {
+    "cpu": "12th Gen Intel(R) Core(TM) i7-1255U",
+    "logical_cpus": "12",
+    "memory": "15.3 GiB",
+    "os": "Linux 7.0.2-arch1-1",
+    "python": "3.12.14",
+    "cpu_governor": "powersave",
+    "on_ac_power": "yes"
+  },
+  "setup": {
+    "Service": "`bastion serve`, 1 worker process(es), JSONL decision log",
+    "Model": "local/da7db7ba6d194aae8cddbe1d35519fc3 (37 inputs), synthetic training data",
+    "Online store": "Redis 8.6.6 in a rootless Podman container, host network",
+    "History in Redis": "271,529 events and 248,582 labels",
+    "Requests": "20,000 synthetic payloads, cycled",
+    "Load generator": "k6 (docker.io/grafana/k6:1.8.1) in a container, host network, constant arrival rate",
+    "Per rate": "30 s, after one 10 s warm-up run"
+  },
+  "results": [
+    {
+      "target_rps": 200,
+      "duration_s": 30,
+      "achieved_rps": 200.0022269136473,
+      "requests": 6001,
+      "failed_rate": 0.0,
+      "dropped_iterations": 0,
+      "client_ms": {
+        "min": 1.279387,
+        "avg": 2.7436303926012364,
+        "med": 2.473241,
+        "p(90)": 4.206746,
+        "p(95)": 4.535508,
+        "p(99)": 5.0331,
+        "max": 9.55937
+      },
+      "server_ms": {
+        "redis_ms": {
+          "p50": 0.750728,
+          "p95": 1.349213,
+          "p99": 1.578107,
+          "max": 4.725783
+        },
+        "features_ms": {
+          "p50": 0.833567,
+          "p95": 1.822212,
+          "p99": 2.023647,
+          "max": 2.401166
+        },
+        "model_ms": {
+          "p50": 0.191462,
+          "p95": 0.364183,
+          "p99": 0.429039,
+          "max": 0.755609
+        },
+        "total_ms": {
+          "p50": 1.775637,
+          "p95": 3.464643,
+          "p99": 3.866161,
+          "max": 5.944859
+        }
+      },
+      "sustained": true
+    },
+    {
+      "target_rps": 400,
+      "duration_s": 30,
+      "achieved_rps": 399.9849250748215,
+      "requests": 12000,
+      "failed_rate": 0.0,
+      "dropped_iterations": 0,
+      "client_ms": {
+        "p(99)": 5.681916970000001,
+        "max": 62.443731,
+        "min": 1.014269,
+        "avg": 2.267520703666669,
+        "med": 2.1459065,
+        "p(90)": 3.1040940000000004,
+        "p(95)": 3.7542139999999975
+      },
+      "server_ms": {
+        "redis_ms": {
+          "p50": 0.580748,
+          "p95": 1.16357845,
+          "p99": 2.8134793000000022,
+          "max": 57.734641
+        },
+        "features_ms": {
+          "p50": 0.7170345,
+          "p95": 1.12407825,
+          "p99": 1.3915222300000014,
+          "max": 2.151983
+        },
+        "model_ms": {
+          "p50": 0.16155750000000002,
+          "p95": 0.25177514999999995,
+          "p99": 0.31267403,
+          "max": 0.989428
+        },
+        "total_ms": {
+          "p50": 1.561253,
+          "p95": 2.448905749999998,
+          "p99": 3.97225937,
+          "max": 58.475084
+        }
+      },
+      "sustained": true
+    },
+    {
+      "target_rps": 200,
+      "duration_s": 30,
+      "achieved_rps": 200.01276591394094,
+      "requests": 6001,
+      "failed_rate": 0.0,
+      "dropped_iterations": 0,
+      "client_ms": {
+        "p(95)": 4.509683,
+        "p(99)": 5.011452,
+        "max": 7.333687,
+        "min": 1.350918,
+        "avg": 2.7795521526412195,
+        "med": 2.49468,
+        "p(90)": 4.22027
+      },
+      "server_ms": {
+        "redis_ms": {
+          "p50": 0.758543,
+          "p95": 1.347427,
+          "p99": 1.563854,
+          "max": 2.444472
+        },
+        "features_ms": {
+          "p50": 0.867764,
+          "p95": 1.805597,
+          "p99": 2.018078,
+          "max": 2.767067
+        },
+        "model_ms": {
+          "p50": 0.195282,
+          "p95": 0.369538,
+          "p99": 0.440579,
+          "max": 0.717305
+        },
+        "total_ms": {
+          "p50": 1.805885,
+          "p95": 3.444039,
+          "p99": 3.846925,
+          "max": 5.090101
+        }
+      },
+      "sustained": true
+    },
+    {
+      "target_rps": 400,
+      "duration_s": 30,
+      "achieved_rps": 399.99659792577745,
+      "requests": 12001,
+      "failed_rate": 0.0,
+      "dropped_iterations": 0,
+      "client_ms": {
+        "min": 1.086499,
+        "avg": 2.223739995333727,
+        "med": 2.155303,
+        "p(90)": 3.133772,
+        "p(95)": 3.829102,
+        "p(99)": 5.768761,
+        "max": 16.333713
+      },
+      "server_ms": {
+        "redis_ms": {
+          "p50": 0.583205,
+          "p95": 1.183313,
+          "p99": 2.918634,
+          "max": 13.106916
+        },
+        "features_ms": {
+          "p50": 0.714952,
+          "p95": 1.120158,
+          "p99": 1.381626,
+          "max": 2.79784
+        },
+        "model_ms": {
+          "p50": 0.163753,
+          "p95": 0.258401,
+          "p99": 0.318722,
+          "max": 0.827831
+        },
+        "total_ms": {
+          "p50": 1.560902,
+          "p95": 2.435232,
+          "p99": 4.065149,
+          "max": 13.887363
+        }
+      },
+      "sustained": true
+    },
+    {
+      "target_rps": 200,
+      "duration_s": 30,
+      "achieved_rps": 199.99676670449648,
+      "requests": 6001,
+      "failed_rate": 0.0,
+      "dropped_iterations": 0,
+      "client_ms": {
+        "p(95)": 4.545612,
+        "p(99)": 5.087449,
+        "max": 63.218689,
+        "min": 1.336702,
+        "avg": 2.8339107755374155,
+        "med": 2.481243,
+        "p(90)": 4.201226
+      },
+      "server_ms": {
+        "redis_ms": {
+          "p50": 0.755111,
+          "p95": 1.343638,
+          "p99": 1.631821,
+          "max": 61.614124
+        },
+        "features_ms": {
+          "p50": 0.817944,
+          "p95": 1.80106,
+          "p99": 2.01633,
+          "max": 2.551933
+        },
+        "model_ms": {
+          "p50": 0.192332,
+          "p95": 0.362214,
+          "p99": 0.433257,
+          "max": 0.60326
+        },
+        "total_ms": {
+          "p50": 1.775813,
+          "p95": 3.45958,
+          "p99": 3.88027,
+          "max": 62.388234
+        }
+      },
+      "sustained": true
+    },
+    {
+      "target_rps": 400,
+      "duration_s": 30,
+      "achieved_rps": 399.98759149901304,
+      "requests": 12001,
+      "failed_rate": 0.0,
+      "dropped_iterations": 0,
+      "client_ms": {
+        "avg": 2.4408432958920097,
+        "med": 2.212471,
+        "p(90)": 3.772457,
+        "p(95)": 4.880661,
+        "p(99)": 7.643034,
+        "max": 21.223859,
+        "min": 1.052488
+      },
+      "server_ms": {
+        "redis_ms": {
+          "p50": 0.594737,
+          "p95": 2.186179,
+          "p99": 4.066522,
+          "max": 15.371802
+        },
+        "features_ms": {
+          "p50": 0.767484,
+          "p95": 1.160712,
+          "p99": 1.433988,
+          "max": 3.093156
+        },
+        "model_ms": {
+          "p50": 0.167498,
+          "p95": 0.286798,
+          "p99": 0.378332,
+          "max": 1.330107
+        },
+        "total_ms": {
+          "p50": 1.615285,
+          "p95": 3.239624,
+          "p99": 5.342579,
+          "max": 16.815506
+        }
+      },
+      "sustained": true
+    }
+  ]
+}
