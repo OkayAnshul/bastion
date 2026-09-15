@@ -66,10 +66,17 @@ def _decision_sink() -> DecisionSink:
 
     settings = get_settings()
     if settings.decision_sink == "kafka":
-        topic = load_streaming_config().topics.decisions.name
-        return KafkaDecisionSink(settings.kafka_bootstrap, topic)
+        from bastion.streaming.topics import ensure_topics
+
+        topic = load_streaming_config().topics.decisions
+        ensure_topics(settings.kafka_bootstrap, [topic])  # producing must not depend on start order
+        return KafkaDecisionSink(settings.kafka_bootstrap, topic.name)
     if settings.decision_sink == "jsonl":
         return JsonlDecisionSink(settings.decision_log_path)
+    if settings.decision_sink == "sqlite":
+        from bastion.serving.decision_store import SqliteDecisionSink
+
+        return SqliteDecisionSink(settings.decision_db_path)
     return NullDecisionSink()
 
 

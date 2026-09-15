@@ -31,12 +31,14 @@ stream_app = typer.Typer(
 )
 bench_app = typer.Typer(no_args_is_help=True, help="Benchmarks with published results.")
 policy_app = typer.Typer(no_args_is_help=True, help="Decision policy: budget sweep and tuning.")
+demo_app = typer.Typer(no_args_is_help=True, help="Self-contained demo on synthetic data.")
 app.add_typer(data_app, name="data")
 app.add_typer(baseline_app, name="baseline")
 app.add_typer(experiment_app, name="experiment")
 app.add_typer(stream_app, name="stream")
 app.add_typer(bench_app, name="bench")
 app.add_typer(policy_app, name="policy")
+app.add_typer(demo_app, name="demo")
 
 EventsOption = Annotated[
     Path | None,
@@ -260,7 +262,9 @@ def stream_topics() -> None:
     from bastion.streaming.topics import ensure_topics
 
     topics = load_streaming_config().topics
-    created = ensure_topics(get_settings().kafka_bootstrap, [topics.transactions, topics.labels])
+    created = ensure_topics(
+        get_settings().kafka_bootstrap, [topics.transactions, topics.labels, topics.decisions]
+    )
     typer.echo(f"created: {', '.join(created) if created else 'none (all topics exist)'}")
 
 
@@ -277,11 +281,24 @@ def stream_replay(
     direct: Annotated[
         bool, typer.Option("--direct", help="Write straight into Redis instead of Redpanda.")
     ] = False,
+    score_url: Annotated[
+        str | None,
+        typer.Option(
+            "--score-url", help="Score each transaction with this service before publishing it."
+        ),
+    ] = None,
 ) -> None:
     """Replay an event table in event-time order into Redpanda, or straight into Redis."""
     from bastion.data.labels import label_events, load_label_delay_config
     from bastion.streaming.config import load_streaming_config
-    from bastion.streaming.replay import EventSink, KafkaSink, StoreSink, replay, timeline
+    from bastion.streaming.replay import (
+        EventSink,
+        KafkaSink,
+        ScoringSink,
+        StoreSink,
+        replay,
+        timeline,
+    )
     from bastion.streaming.topics import ensure_topics
 
     frame, source = _read_events(events)
@@ -294,11 +311,15 @@ def stream_replay(
     else:
         ensure_topics(settings.kafka_bootstrap, [topics.transactions, topics.labels])
         sink = KafkaSink(settings.kafka_bootstrap, topics)
+    if score_url is not None:
+        sink = ScoringSink(score_url, sink)
     stats = replay(timeline(frame, arrivals), sink, speedup=speedup or None, limit=limit)
     typer.echo(
         f"replayed {stats.transactions:,} transactions and {stats.labels:,} labels from {source}:"
         f" {stats.event_span_ms / 86_400_000:.1f} event-days in {stats.wall_seconds:.1f} s"
     )
+    if isinstance(sink, ScoringSink):
+        typer.echo(f"decisions: {sink.actions} · scoring failures: {sink.failures:,}")
 
 
 @stream_app.command("features")
@@ -327,7 +348,58 @@ def stream_features(
     typer.echo(f"processed {processed:,} messages")
 
 
+@stream_app.command("decisions")
+def stream_decisions(
+    max_messages: Annotated[
+        int | None, typer.Option(help="Stop after this many decisions.")
+    ] = None,
+    idle_timeout: Annotated[
+        float | None, typer.Option(help="Stop after this many seconds without messages.")
+    ] = None,
+) -> None:
+    """Consume scored decisions from Redpanda into the analyst console's store."""
+    from bastion.serving.decision_store import DecisionStore
+    from bastion.streaming.config import load_streaming_config
+    from bastion.streaming.decision_sink import run_decision_sink
+    from bastion.streaming.topics import ensure_topics
+
+    settings = get_settings()
+    config = load_streaming_config()
+    ensure_topics(settings.kafka_bootstrap, [config.topics.decisions])
+    stored = run_decision_sink(
+        settings.kafka_bootstrap,
+        f"{config.consumer_group}-decisions",
+        config.topics.decisions.name,
+        DecisionStore(settings.decision_db_path),
+        max_messages=max_messages,
+        idle_timeout_s=idle_timeout,
+    )
+    typer.echo(f"stored {stored:,} decisions in {settings.decision_db_path}")
+
+
 # ------------------------------------------------------------------------------ phase 3
+
+
+@app.command()
+def console(
+    port: Annotated[int, typer.Option(help="Port to serve the console on.")] = 3000,
+    address: Annotated[str, typer.Option(help="Interface to bind.")] = "127.0.0.1",
+) -> None:
+    """Run the analyst console (Streamlit) over the decision store."""
+    import subprocess
+    import sys
+    from importlib.util import find_spec
+
+    spec = find_spec("bastion.console.app")  # locate the page without running it
+    if find_spec("streamlit") is None or spec is None or spec.origin is None:
+        typer.echo("The console needs its extra: uv sync --extra console", err=True)
+        raise typer.Exit(code=1)
+    command = [
+        sys.executable, "-m", "streamlit", "run", spec.origin,
+        "--server.port", str(port), "--server.address", address,
+        "--server.headless", "true", "--browser.gatherUsageStats", "false",
+    ]  # fmt: skip
+    raise typer.Exit(code=subprocess.call(command))
 
 
 @app.command()
@@ -446,6 +518,12 @@ def bench_latency(
         "Load generator": f"k6 ({K6_IMAGE}) in a container, host network, constant arrival rate",
         "Per rate": f"{duration} s, after one {warmup} s warm-up run",
     }
+    if policy := model.get("policy"):
+        setup["Policy"] = (
+            f"{policy['reviews_per_day']} reviews/day, review threshold"
+            f" {policy['review_threshold']:.2f} ({'tuned' if policy['tuned'] else 'untuned'}),"
+            f" top {policy['reason_codes_top_k']} reason codes"
+        )
     path = write_latency_report(results, results_dir, setup=setup, hardware=hardware_description())
     for r in results:
         typer.echo(
@@ -552,18 +630,53 @@ def policy_sweep(
             "data_fingerprint": data_fingerprint(frame),
         },
     )
-    from bastion.policy.engine import TunedPolicy
-    from bastion.policy.sweep import EXPECTED_LOSS, TUNING_WINDOW
+    from bastion.policy.sweep import tuned_policy
 
-    operating = result.outcome(EXPECTED_LOSS, result.operating_budget)
-    tuned = TunedPolicy(
-        model_version=version,
-        spec_fingerprint=bundle.spec.fingerprint(),
-        reviews_per_day=result.operating_budget,
-        review_threshold=operating.parameters["review_threshold"],
-        costs=costs.model_dump(),
-        tuned_on=TUNING_WINDOW,
-        git_revision=git_revision(),
-    ).save(settings.artifacts_dir / "policies" / f"{version.replace('/', '_')}.json")
+    tuned = tuned_policy(result, bundle=bundle, model_version=version, costs=costs).save(
+        settings.artifacts_dir / "policies" / f"{version.replace('/', '_')}.json"
+    )
     typer.echo(f"wrote {path} · MLflow run {run_id}")
     typer.echo(f"tuned policy for serving: {tuned} (set BASTION_POLICY_PATH to use it)")
+
+
+@demo_app.command("bootstrap")
+def demo_bootstrap(
+    force: Annotated[
+        bool, typer.Option("--force", help="Rebuild even if the demo is already prepared.")
+    ] = False,
+    days: Annotated[int, typer.Option(help="Days of synthetic events.")] = 183,
+    cards: Annotated[int, typer.Option(help="Synthetic cards.")] = 3_000,
+    seed: Annotated[int, typer.Option(help="Generator seed.")] = 7,
+) -> None:
+    """Prepare synthetic events, a trained model and a tuned policy for the compose demo."""
+    from bastion.data.labels import load_label_delay_config
+    from bastion.data.splits import load_split_config
+    from bastion.demo import DemoInputs, DemoPaths, bootstrap_demo
+    from bastion.evaluation.cost import load_cost_model
+    from bastion.policy.config import load_policy_config
+    from bastion.rules.baseline import load_rule_config
+    from bastion.streaming.synthetic import SyntheticConfig
+    from bastion.training.dataset import load_model_config
+
+    settings = get_settings()
+    paths = DemoPaths.under(settings.processed_dir, settings.artifacts_dir)
+    inputs = DemoInputs(
+        synthetic=SyntheticConfig(days=days, n_cards=cards, seed=seed),
+        splits=load_split_config(),
+        labels=load_label_delay_config(),
+        model=load_model_config(),
+        rules=load_rule_config(),
+        costs=load_cost_model(),
+        policy=load_policy_config(),
+    )
+    built = bootstrap_demo(
+        paths,
+        inputs,
+        tracking_uri=settings.mlflow_tracking_uri,
+        artifacts_dir=settings.artifacts_dir,
+        force=force,
+    )
+    status = "prepared" if built else "already prepared"
+    typer.echo(
+        f"demo {status}: events {paths.events} · model {paths.model} · policy {paths.policy}"
+    )

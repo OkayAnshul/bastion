@@ -19,9 +19,9 @@ WORKDIR /app
 
 # Dependencies in a cached layer first, then the project itself.
 COPY pyproject.toml uv.lock README.md ./
-RUN --mount=type=cache,target=/root/.cache/uv uv sync --frozen --no-dev --no-install-project
+RUN --mount=type=cache,target=/root/.cache/uv uv sync --frozen --no-dev --extra console --no-install-project
 COPY src ./src
-RUN --mount=type=cache,target=/root/.cache/uv uv sync --frozen --no-dev
+RUN --mount=type=cache,target=/root/.cache/uv uv sync --frozen --no-dev --extra console
 # Versioned experiment and policy parameters that services read at runtime.
 COPY configs ./configs
 

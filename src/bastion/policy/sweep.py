@@ -51,6 +51,7 @@ from bastion.policy.decide import (
     tune_probability_thresholds,
     tune_review_threshold,
 )
+from bastion.policy.engine import TunedPolicy
 from bastion.policy.expected_loss import ExpectedCosts, FloatArray, StrArray, expected_costs
 from bastion.policy.overrides import overrides_for_rows
 from bastion.provenance import git_revision
@@ -374,6 +375,22 @@ def run_policy_sweep(
             **ranking_metrics(test.is_fraud, test.probability),
         },
         override_counts={str(name): int(count) for name, count in zip(names, counts, strict=True)},
+    )
+
+
+def tuned_policy(
+    result: SweepResult, *, bundle: ModelBundle, model_version: str, costs: CostModel
+) -> TunedPolicy:
+    """The serving policy file for the operating budget: its tuned threshold, model and costs."""
+    operating = result.outcome(EXPECTED_LOSS, result.operating_budget)
+    return TunedPolicy(
+        model_version=model_version,
+        spec_fingerprint=bundle.spec.fingerprint(),
+        reviews_per_day=result.operating_budget,
+        review_threshold=operating.parameters["review_threshold"],
+        costs=costs.model_dump(),
+        tuned_on=TUNING_WINDOW,
+        git_revision=git_revision(),
     )
 
 

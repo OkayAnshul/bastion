@@ -34,6 +34,7 @@ from matplotlib.axis import Axis
 from matplotlib.ticker import NullFormatter
 
 from bastion.data.labels import LabelDelayConfig, label_events
+from bastion.evaluation.cost import Action
 from bastion.features.online import OnlineFeatureStore
 from bastion.plotting import BASELINE, INK_MUTED, SERIES, label_axes, new_figure, style_axes
 from bastion.provenance import git_revision
@@ -44,7 +45,7 @@ from bastion.streaming.replay import StoreSink, replay, timeline
 K6_IMAGE = "docker.io/grafana/k6:1.8.1"
 K6_SCRIPT = Path("benchmarks/k6/score.js")
 BUDGET_P99_MS = 50.0  # ARCHITECTURE.md §3.3
-STAGE_BUDGETS_MS = {"redis_ms": 12.0, "features_ms": 4.0, "model_ms": 8.0}
+STAGE_BUDGETS_MS = {"redis_ms": 12.0, "features_ms": 4.0, "model_ms": 8.0, "policy_ms": 3.0}
 REPORT_STEM = "latency"
 FIGURES = ("latency_vs_rate.png", "latency_histogram.png")
 LOG_TICKS_MS = (0.5, 1, 2, 5, 10, 20, 50, 100, 200, 500, 1000, 2000)
@@ -88,6 +89,8 @@ class RateResult:
     server_ms: dict[str, dict[str, float]]  # stage -> p50 / p95 / p99 / max
     # HTTP status -> requests, from k6's samples; "0" means no response.
     status_counts: dict[str, int] = field(default_factory=dict)
+    # Policy action -> decisions logged at this rate. Empty in recordings made before Phase 4.
+    decision_counts: dict[str, int] = field(default_factory=dict)
 
     @property
     def sustained(self) -> bool:
@@ -157,6 +160,10 @@ def _decisions_after(path: Path, skip: int) -> list[DecisionRecord]:
     return [DecisionRecord.model_validate_json(line) for line in lines]
 
 
+def _explained(record: DecisionRecord) -> bool:
+    return record.decision is not None and record.decision.action is not Action.APPROVE
+
+
 def _percentiles(values: npt.ArrayLike) -> dict[str, float]:
     array = np.asarray(values, dtype=np.float64)
     if not array.size:
@@ -200,8 +207,17 @@ def run_latency_benchmark(
                 client_ms={k: float(v) for k, v in metrics["http_req_duration"]["values"].items()},
                 server_ms={
                     stage: _percentiles([getattr(r.timings, stage) for r in records])
-                    for stage in ("redis_ms", "features_ms", "model_ms", "total_ms")
+                    for stage in ("redis_ms", "features_ms", "model_ms", "policy_ms", "total_ms")
+                }
+                | {
+                    # Reason codes are computed only for reviewed and blocked transactions.
+                    "explain_ms": _percentiles(
+                        [r.timings.explain_ms for r in records if _explained(r)]
+                    )
                 },
+                decision_counts=dict(
+                    Counter(r.decision.action.value for r in records if r.decision is not None)
+                ),
                 status_counts=_status_counts(raw_dir / f"rate_{rate}.csv"),
             )
         )
@@ -377,16 +393,21 @@ def write_latency_report(
         "redis_ms": "Redis round trip + event-loop wait",
         "features_ms": "Feature evaluation + row",
         "model_ms": "LightGBM + calibration",
+        "policy_ms": "Policy: overrides, expected cost, review capacity",
+        "explain_ms": "Reason codes (reviewed and blocked only)",
         "total_ms": "Handler total",
     }
     for stage, label in names.items():
-        s = headline.server_ms[stage]
+        s = headline.server_ms.get(stage) or {}
         budget = STAGE_BUDGETS_MS.get(stage)
         budget_cell = f"{budget:g} ms" if budget is not None else "n/a"
-        lines.append(
-            f"| {label} | {budget_cell} | {s['p50']:.2f} | {s['p95']:.2f} | {s['p99']:.2f}"
-            f" | {s['max']:.2f} |"
+        cells = " | ".join(f"{s[q]:.2f}" if q in s else "n/a" for q in ("p50", "p95", "p99", "max"))
+        lines.append(f"| {label} | {budget_cell} | {cells} |")
+    if headline.decision_counts:
+        counts = ", ".join(
+            f"{action} {n:,}" for action, n in sorted(headline.decision_counts.items())
         )
+        lines += ["", f"Decisions logged at this rate: {counts}."]
     lines += [
         "",
         "The Redis stage runs from the start of the handler until the pipeline's replies have been"

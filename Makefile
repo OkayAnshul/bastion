@@ -1,6 +1,6 @@
 .DEFAULT_GOAL := help
 .PHONY: help setup lint format test test-integration test-data up down logs data eda baseline train \
-	experiment-leakage serve bench-prepare bench policy
+	experiment-leakage serve bench-prepare bench policy console demo
 
 UV      ?= uv
 RUN     := $(UV) run
@@ -11,7 +11,7 @@ help: ## List available targets
 
 # ---------------------------------------------------------------- development
 setup: ## Create the Python 3.12 environment and install git hooks
-	$(UV) sync --extra data
+	$(UV) sync --extra data --extra console
 	$(RUN) pre-commit install
 
 lint: ## Ruff lint + format check + mypy (strict)
@@ -73,3 +73,9 @@ bench: ## k6 latency benchmark against a running service into docs/results/phase
 # ---------------------------------------------------------------- phase 4
 policy: ## Review-budget sweep of the decision policy into docs/results/phase4/ (logged to MLflow)
 	$(RUN) bastion policy sweep
+
+console: ## Analyst console on :3000 over the decision store (needs the console extra)
+	$(RUN) bastion console
+
+demo: ## Full stack on synthetic data: decisions flow into the console at http://localhost:3000
+	$(COMPOSE) --profile demo up --build

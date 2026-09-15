@@ -102,18 +102,19 @@ services:
       redis:
         condition: service_healthy
 
-  # Replays a prepared event table in event time. Generate one first, e.g.
-  # `uv run bastion data synthetic`, then `docker compose --profile demo up simulator`.
-  simulator:
+  # ---- demo profile: `docker compose --profile demo up`, then open http://localhost:3000 ----
+
+  # Prepares synthetic events, a trained model and a tuned policy once (ARCHITECTURE §5). Later runs
+  # find them in data/ and artifacts/ and exit immediately.
+  bootstrap:
     <<: *bastion-app
     profiles: ["demo"]
-    command: ["stream", "replay", "--events", "data/processed/events_synthetic.parquet", "--speedup", "3600"]
+    command: ["demo", "bootstrap"]
     depends_on:
-      feature-builder:
-        condition: service_started
+      mlflow:
+        condition: service_healthy
 
-  # POST /v1/score. Loads the MLflow champion at startup; register one first, e.g.
-  # `docker compose run --rm app train --events data/processed/events_synthetic.parquet --register`.
+  # POST /v1/score with the demo model and its tuned review threshold. Decisions go to Redpanda.
   scoring:
     <<: *bastion-app
     profiles: ["demo"]
@@ -123,15 +124,59 @@ services:
       BASTION_KAFKA_BOOTSTRAP: redpanda:9092
       BASTION_MLFLOW_TRACKING_URI: http://mlflow:5000
       BASTION_DECISION_SINK: kafka
+      BASTION_MODEL_PATH: artifacts/demo/model
+      BASTION_POLICY_PATH: artifacts/demo/policy.json
     ports:
       - "8000:8000"
+    healthcheck:
+      test: ["CMD", "python", "-c", "import urllib.request; urllib.request.urlopen('http://localhost:8000/readyz')"]
+      interval: 5s
+      timeout: 3s
+      retries: 30
+      start_period: 10s
     depends_on:
+      bootstrap:
+        condition: service_completed_successfully
       redis:
         condition: service_healthy
       redpanda:
         condition: service_healthy
-      mlflow:
+
+  # The payment gateway: replays the synthetic table in event time (one hour per second), asking the
+  # scoring service for a decision before publishing each transaction.
+  simulator:
+    <<: *bastion-app
+    profiles: ["demo"]
+    command: ["stream", "replay", "--events", "data/processed/events_synthetic.parquet",
+              "--speedup", "3600", "--score-url", "http://scoring:8000"]
+    depends_on:
+      feature-builder:
+        condition: service_started
+      scoring:
         condition: service_healthy
+
+  # Decisions topic into the console's SQLite store (artifacts/decisions/decisions.db).
+  decision-sink:
+    <<: *bastion-app
+    profiles: ["demo"]
+    command: ["stream", "decisions"]
+    restart: unless-stopped
+    depends_on:
+      redpanda:
+        condition: service_healthy
+
+  # Analyst console: live decisions, review queue, case pages.
+  console:
+    <<: *bastion-app
+    profiles: ["demo"]
+    command: ["console", "--address", "0.0.0.0", "--port", "3000"]
+    environment:
+      BASTION_SCORING_URL: http://scoring:8000
+    ports:
+      - "3000:3000"
+    depends_on:
+      decision-sink:
+        condition: service_started
 
 volumes:
   redpanda-data:

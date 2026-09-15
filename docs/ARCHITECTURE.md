@@ -304,6 +304,17 @@ conflict between this document and reality.
   file is given. One test replays a stream through the offline and online paths and requires
   identical actions; the serving test requires HTTP decisions to equal the offline policy's. A Redis
   failure while reserving a review answers 503, like a failed feature read.
+- **Analyst console and decision store (Phase 4).** The console is Streamlit on port 3000, not
+  React. It has one page file per view in `bastion/console/pages`. Everything it shows is computed
+  and unit-tested in `bastion.console.views`, and a Streamlit AppTest renders every page. It reads a
+  SQLite store in WAL mode (`bastion.serving.decision_store`). Decisions arrive from the decisions
+  topic through `bastion stream decisions`, or straight from the service with
+  `BASTION_DECISION_SINK=sqlite`. They are upserted by transaction id, with analyst verdicts beside
+  them. SQLite is an operational store for one node; Phase 6 monitoring reads the event log. The
+  review queue is sorted by expected fraud loss (probability times amount). In the compose demo,
+  `bastion demo bootstrap` prepares synthetic events, a model and a tuned policy once, and the
+  simulator acts as the payment gateway, asking `/v1/score` for a decision before publishing each
+  transaction.
 - **Raw event sink** *(deferred to Phase 6).* The Parquet sink that turns the stream into an offline
   store is built with the retraining loop, which is its first consumer. Until then, training reads
   the prepared event table directly.

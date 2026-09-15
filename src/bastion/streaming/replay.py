@@ -7,7 +7,8 @@ and ``None`` replays as fast as possible.
 
 Sinks decide where items go. ``KafkaSink`` publishes to Redpanda, keyed by card so each card's
 events stay ordered on one partition. ``StoreSink`` writes straight into an online store, for tests
-and local runs without a broker.
+and local runs without a broker. ``ScoringSink`` wraps either and acts as the payment gateway: it
+asks the scoring service for a decision before passing the transaction on (ARCHITECTURE §2).
 """
 
 from __future__ import annotations
@@ -18,6 +19,7 @@ from collections.abc import Callable, Iterable, Iterator
 from dataclasses import dataclass, field
 from typing import Any, Protocol
 
+import httpx
 import polars as pl
 from confluent_kafka import KafkaException, Producer
 
@@ -118,6 +120,52 @@ class KafkaSink:
             raise KafkaException(self._error)
         if remaining:
             raise RuntimeError(f"{remaining} messages were not delivered within 30 seconds")
+
+
+class ScoringSink:
+    """Scores each transaction with ``POST /v1/score``, then hands it to ``inner``.
+
+    That is the gateway's order: decide first, publish afterwards, so the online store only learns
+    of a transaction after it was scored. A failed or refused score is counted, and the transaction
+    is still published, as a real gateway would still record the payment attempt.
+    """
+
+    def __init__(
+        self,
+        target: str,
+        inner: EventSink,
+        *,
+        client: httpx.Client | None = None,
+        timeout_s: float = 5.0,
+    ) -> None:
+        self._url = f"{target.rstrip('/')}/v1/score"
+        self._inner = inner
+        self._client = client or httpx.Client(timeout=timeout_s)
+        self.actions: dict[str, int] = {}
+        self.failures = 0
+
+    def send_transaction(self, event: TransactionEvent) -> None:
+        try:
+            response = self._client.post(
+                self._url,
+                content=event.model_dump_json(),
+                headers={"Content-Type": "application/json"},
+            )
+        except httpx.HTTPError:
+            self.failures += 1
+        else:
+            if response.status_code == httpx.codes.OK:
+                action = str(response.json()["decision"]["action"])
+                self.actions[action] = self.actions.get(action, 0) + 1
+            else:
+                self.failures += 1
+        self._inner.send_transaction(event)
+
+    def send_label(self, label: LabelEvent) -> None:
+        self._inner.send_label(label)
+
+    def flush(self) -> None:
+        self._inner.flush()
 
 
 @dataclass(frozen=True)

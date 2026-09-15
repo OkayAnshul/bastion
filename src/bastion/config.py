@@ -39,8 +39,12 @@ class Settings(BaseSettings):
     model_alias: str = "champion"
     # Review threshold tuned by `bastion policy sweep` for the served model; unset means 0.
     policy_path: Path | None = None
-    decision_sink: str = "jsonl"  # jsonl | kafka | none
+    decision_sink: str = "jsonl"  # jsonl | kafka | sqlite | none
     decision_log_path: Path = Path("artifacts/decisions/decisions.jsonl")
+    # The analyst console's operational store (bastion.serving.decision_store).
+    decision_db_path: Path = Path("artifacts/decisions/decisions.db")
+    # Where the analyst console finds the scoring service for model and policy details.
+    scoring_url: str = "http://localhost:8000"
     # Concurrent Redis connections per worker. redis-py's asyncio pool raises instead of waiting
     # once all are in use, and the score handler answers 503.
     redis_max_connections: int = 100

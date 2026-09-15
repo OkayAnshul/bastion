@@ -8,6 +8,7 @@ authors = [{ name = "OkayAnshul" }]
 dependencies = [
     "confluent-kafka>=2.8",
     "fastapi>=0.115",
+    "httpx>=0.28",
     "lightgbm>=4.5",
     "matplotlib>=3.10",
     "mlflow>=3.1",
@@ -27,6 +28,9 @@ dependencies = [
 [project.optional-dependencies]
 # Only needed to fetch IEEE-CIS; the runtime images never download data.
 data = ["kaggle>=1.7"]
+console = [
+    "streamlit>=1.45",
+]
 
 [project.scripts]
 bastion = "bastion.cli:app"
@@ -34,7 +38,6 @@ bastion = "bastion.cli:app"
 [dependency-groups]
 dev = [
     "fakeredis>=2.26",
-    "httpx>=0.28",
     "hypothesis>=6.130",
     "mypy>=1.15",
     "pre-commit>=4.2",
