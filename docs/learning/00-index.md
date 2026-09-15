@@ -12,6 +12,10 @@ behind code that exists in this repository, using numbers measured on this proje
 | [1.3](phase-1/1.3-gbdt-internals.md) | How gradient-boosted trees split | `bastion.training.models` | written; IEEE-CIS numbers pending |
 | [1.4](phase-1/1.4-pr-auc-vs-roc-auc.md) | PR-AUC vs ROC-AUC when fraud is rare | `bastion.evaluation.metrics`, `bastion.training.pipeline` | written; IEEE-CIS numbers pending |
 | [1.5](phase-1/1.5-calibration.md) | Calibration for an expected-loss policy | `bastion.evaluation.calibration`, `bastion.training.train` | written; IEEE-CIS numbers pending |
+| [2.1](phase-2/2.1-log-structured-broker.md) | Why a log-structured broker | `bastion.streaming.replay`, `bastion.streaming.feature_builder` | written |
+| [2.2](phase-2/2.2-event-time-vs-processing-time.md) | Event time vs processing time | `bastion.features.online`, `bastion.streaming.replay` | written |
+| [2.3](phase-2/2.3-online-offline-stores-and-skew.md) | Online and offline stores, train/serve skew | `bastion.features.online`, `bastion.features.batch` | written |
+| [2.4](phase-2/2.4-the-parity-test.md) | The parity test | `tests/unit/test_online_features.py`, `tests/integration/test_stream_parity.py` | written; passes in CI |
 
 Also:
 

@@ -5,7 +5,8 @@ A real-world problem built with production-style engineering on **public (IEEE-C
 Bastion has never processed real payments, real customers, or real money.
 
 > Status: **Phases 0–1 code complete and tested on synthetic data; IEEE-CIS results pending the
-> dataset download. Phase 2 (streaming) in progress.** Every number in this README comes from a
+> dataset download. Phase 2 complete: batch/stream parity passes in CI against Redpanda and Redis.
+> Phase 3 (scoring service) in progress.** Every number in this README comes from a
 > run recorded in `docs/results/`. Anything not yet measured says **unmeasured**; anything not yet
 > built says **planned**.
 
@@ -55,8 +56,8 @@ Full design, component contracts, latency budget and ADRs: [`docs/ARCHITECTURE.m
 |---|---|---|
 | 0 | Scaffold, data contracts, EDA, rules baseline | code complete; IEEE-CIS results pending dataset download |
 | 1 | Temporal validation, point-in-time features, leakage experiment, calibration | code complete; IEEE-CIS results pending dataset download |
-| 2 | Streaming replay, Redpanda, Redis online features, batch/stream parity test | planned |
-| 3 | FastAPI scoring service, latency benchmark | planned |
+| 2 | Streaming replay, Redpanda, Redis online features, batch/stream parity test | complete: parity passes in CI (exit criterion) |
+| 3 | FastAPI scoring service, latency benchmark | in progress: service built; latency unmeasured |
 | 4 | Expected-loss policy engine, analyst console | planned |
 | 5 | Entity graph features (optional GNN) | planned |
 | 6 | Drift detection and retraining loop | planned |
@@ -70,7 +71,7 @@ Full design, component contracts, latency budget and ADRs: [`docs/ARCHITECTURE.m
 | Rules baseline: precision / recall / monetary loss | unmeasured |
 | Leakage experiment: naive vs point-in-time PR-AUC | unmeasured |
 | Calibration: Brier score, reliability curve | unmeasured |
-| Batch/stream feature parity | unmeasured |
+| Batch/stream feature parity | exact equality through Redpanda + Redis in CI (synthetic events; see learning log 2.4) |
 | Scoring latency p50 / p95 / p99, throughput | unmeasured |
 | Fraud value caught vs review budget | unmeasured |
 | Graph feature lift | unmeasured |
@@ -91,6 +92,7 @@ make eda        # EDA report → docs/results/phase0/
 make baseline   # rules baseline → docs/results/phase0/
 make train      # LightGBM + calibration → docs/results/phase1/ (tracked in MLflow)
 make experiment-leakage   # naive vs point-in-time features → docs/results/phase1/
+make test-integration     # batch/stream parity through Redpanda + Redis (after make up)
 ```
 
 Run `make help` for all targets.
