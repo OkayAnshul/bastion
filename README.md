@@ -6,8 +6,9 @@ Bastion has never processed real payments, real customers, or real money.
 
 > Status: **Phases 0–1 code complete and tested on synthetic data; IEEE-CIS results pending the
 > dataset download. Phase 2 complete: batch/stream parity passes in CI against Redpanda and Redis.
-> Phase 3 complete: scoring latency measured on a laptop (histogram below).** Every number in this
-> README comes from a run recorded in `docs/results/`. Anything not yet measured says **unmeasured**; anything not yet
+> Phase 3 complete: scoring latency measured on a laptop (histogram below). Phase 4 code complete:
+> expected-loss policy with a review budget, reason codes and an analyst console; its headline policy
+> curve waits for IEEE-CIS.** Every number in this README comes from a run recorded in `docs/results/`. Anything not yet measured says **unmeasured**; anything not yet
 > built says **planned**.
 
 ---
@@ -58,7 +59,7 @@ Full design, component contracts, latency budget and ADRs: [`docs/ARCHITECTURE.m
 | 1 | Temporal validation, point-in-time features, leakage experiment, calibration | code complete; IEEE-CIS results pending dataset download |
 | 2 | Streaming replay, Redpanda, Redis online features, batch/stream parity test | complete: parity passes in CI (exit criterion) |
 | 3 | FastAPI scoring service, latency benchmark | complete: latency histogram measured (exit criterion); slowest component profiled and fixed |
-| 4 | Expected-loss policy engine, analyst console | planned |
+| 4 | Expected-loss policy engine, analyst console | code complete: policy, review budget, overrides, reason codes, console; exit sentence pending IEEE-CIS |
 | 5 | Entity graph features (optional GNN) | planned |
 | 6 | Drift detection and retraining loop | planned |
 | 7 | Grounded LLM case narratives and faithfulness evals | planned |
@@ -72,21 +73,23 @@ Full design, component contracts, latency budget and ADRs: [`docs/ARCHITECTURE.m
 | Leakage experiment: naive vs point-in-time PR-AUC | unmeasured |
 | Calibration: Brier score, reliability curve | unmeasured |
 | Batch/stream feature parity | exact equality through Redpanda + Redis in CI (synthetic events; see learning log 2.4) |
-| Scoring latency p50 / p95 / p99, throughput | one worker on a laptop: 400 requests/s sustained at p50 2.31 ms, p95 4.60 ms, p99 6.17 ms; 800 requests/s not sustained, with requests beyond the Redis connection pool answered 503 ([report](docs/results/phase3/latency.md)) |
-| Fraud value caught vs review budget | unmeasured |
+| Scoring latency p50 / p95 / p99, throughput | one worker on a laptop, policy engine included: 400 requests/s sustained at p50 2.39 ms, p95 4.96 ms, p99 9.55 ms; 800 requests/s not sustained, with requests beyond the Redis connection pool answered 503 ([report](docs/results/phase4/latency.md)) |
+| Fraud value caught vs review budget | unmeasured on IEEE-CIS (`bastion policy sweep` runs end to end on synthetic data, whose numbers are not published) |
 | Graph feature lift | unmeasured |
 | Drift detection and recovery | unmeasured |
 | Narrative faithfulness | unmeasured |
 
 ## Scoring latency
 
-![Client-side latency distribution of POST /v1/score at 400 requests/s](docs/results/phase3/figures/latency_histogram.png)
+![Client-side latency distribution of POST /v1/score at 400 requests/s](docs/results/phase4/figures/latency_histogram.png)
 
-Measured with k6 at a constant arrival rate against one service worker. k6, the service and Redis
-shared one laptop (Intel i7-1255U), and the payloads and Redis history are synthetic (271,529 events).
-At 400 requests/s, the highest rate sustained with no dropped or failed requests, client-side
-latency was **p50 2.31 ms, p95 4.60 ms, p99 6.17 ms** against a 50 ms p99 budget. At 800 requests/s
-one worker does not keep up; requests that cannot get a Redis connection get a 503, not an error. Full report: [`docs/results/phase3/latency.md`](docs/results/phase3/latency.md).
+Measured with k6 at a constant arrival rate against one service worker, including the Phase 4
+policy engine and reason codes. k6, the service and Redis shared one laptop (Intel i7-1255U), and the
+payloads and Redis history are synthetic (271,529 events). At 400 requests/s, the highest rate
+sustained with no dropped or failed requests, client-side latency was **p50 2.39 ms, p95 4.96 ms,
+p99 9.55 ms** against a 50 ms p99 budget. Three repeats at that rate gave p99 7.44 to 9.39 ms. At 800
+requests/s one worker does not keep up; requests that cannot get a Redis connection get a 503, not
+an error. Full report: [`docs/results/phase4/latency.md`](docs/results/phase4/latency.md).
 
 **Slowest component: online feature evaluation.** Profiling the running service under load put 40%
 of samples in feature evaluation and 5% in LightGBM. Most of that feature time went to input
@@ -94,6 +97,11 @@ validation and key building, repeated for every time window. Evaluating all wind
 with identical outputs, cut feature evaluation from 0.458 to 0.279 ms per call. p99 at 400
 requests/s fell from 10.4–50.4 ms to 5.7–7.6 ms across four runs of each version. Details:
 [`docs/results/phase3/profiling.md`](docs/results/phase3/profiling.md).
+
+**What the policy engine costs.** Pricing the three actions and checking the review budget takes
+0.04 to 0.06 ms at the median. Reason codes (TreeSHAP) take about 2 ms at the median, but only for
+reviewed and blocked transactions: about 1% of requests here. Over three repeats at 400 requests/s,
+p99 was 5.7 to 7.6 ms before the policy engine and 7.4 to 9.4 ms with it.
 
 These are single-process laptop numbers, not a production capacity claim.
 
@@ -114,6 +122,9 @@ make experiment-leakage   # naive vs point-in-time features → docs/results/pha
 make test-integration     # batch/stream parity through Redpanda + Redis (after make up)
 make serve                # scoring service on :8000 (BASTION_MODEL_PATH or the MLflow champion)
 make bench-prepare && make bench   # k6 latency benchmark → docs/results/phase3/ (needs podman or docker)
+make policy               # review-budget sweep → docs/results/phase4/ and a tuned threshold for serving
+make console              # analyst console on :3000 over artifacts/decisions/decisions.db
+make demo                 # the whole stack on synthetic data (see Demo below)
 ```
 
 Run `make help` for all targets.
@@ -133,6 +144,24 @@ uv run bastion experiment leakage --events artifacts/demo/events.parquet --out-d
 
 Synthetic results show that the pipeline works. They are not benchmark results: the fraud patterns
 were written by the author, so they are easier to catch than real fraud.
+
+## Demo
+
+`make demo` runs `docker compose --profile demo up --build`:
+
+1. `bootstrap` generates a synthetic event table, trains a model and tunes the review threshold.
+   It does this once; later starts reuse the files in `data/` and `artifacts/`.
+2. `simulator` plays the payment gateway. It replays the transactions in event time, asks
+   `POST /v1/score` for each decision, then publishes the transaction to Redpanda.
+3. `feature-builder` keeps Redis current, `scoring` decides, and `decision-sink` stores every
+   decision for the console.
+4. The analyst console at <http://localhost:3000> shows live decisions, the review queue sorted by
+   expected fraud loss, and case pages with reason codes and analyst verdicts.
+
+The data is synthetic, so the demo shows the system running, not how much fraud it catches.
+The full stack has not been run end to end yet, because the build machine has no Docker. Its parts
+are tested separately: unit tests, AppTest renders of every console page, and Redpanda integration
+tests in CI.
 
 ## Data
 
