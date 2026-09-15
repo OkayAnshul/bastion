@@ -5,11 +5,14 @@ from datetime import timedelta
 from pathlib import Path
 
 import pytest
-from streamlit.testing.v1 import AppTest
 
 from bastion.config import get_settings
 from bastion.serving.decision_store import DecisionStore
 from tests.unit.test_decision_store import T0, _record
+
+# The console is an optional extra (`uv sync --extra console`). Without it there is nothing to
+# render, and jobs that install only the base dependencies must still collect the test suite.
+AppTest = pytest.importorskip("streamlit.testing.v1", reason="needs the console extra").AppTest
 
 APP = Path(__file__).resolve().parents[2] / "src" / "bastion" / "console" / "app.py"
 
