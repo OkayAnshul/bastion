@@ -37,6 +37,8 @@ class Settings(BaseSettings):
     model_path: Path | None = None
     model_name: str = "bastion-fraud"
     model_alias: str = "champion"
+    # Review threshold tuned by `bastion policy sweep` for the served model; unset means 0.
+    policy_path: Path | None = None
     decision_sink: str = "jsonl"  # jsonl | kafka | none
     decision_log_path: Path = Path("artifacts/decisions/decisions.jsonl")
     # Concurrent Redis connections per worker. redis-py's asyncio pool raises instead of waiting

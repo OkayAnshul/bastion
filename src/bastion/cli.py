@@ -552,4 +552,18 @@ def policy_sweep(
             "data_fingerprint": data_fingerprint(frame),
         },
     )
+    from bastion.policy.engine import TunedPolicy
+    from bastion.policy.sweep import EXPECTED_LOSS, TUNING_WINDOW
+
+    operating = result.outcome(EXPECTED_LOSS, result.operating_budget)
+    tuned = TunedPolicy(
+        model_version=version,
+        spec_fingerprint=bundle.spec.fingerprint(),
+        reviews_per_day=result.operating_budget,
+        review_threshold=operating.parameters["review_threshold"],
+        costs=costs.model_dump(),
+        tuned_on=TUNING_WINDOW,
+        git_revision=git_revision(),
+    ).save(settings.artifacts_dir / "policies" / f"{version.replace('/', '_')}.json")
     typer.echo(f"wrote {path} · MLflow run {run_id}")
+    typer.echo(f"tuned policy for serving: {tuned} (set BASTION_POLICY_PATH to use it)")

@@ -10,8 +10,12 @@ import time
 from dataclasses import dataclass
 from typing import Any
 
+import numpy as np
+import numpy.typing as npt
+
 from bastion.features.batch import DEFAULT_LABEL_STRENGTH, feature_names
 from bastion.features.online import OnlineSnapshot, features_from_snapshot
+from bastion.policy.reason_codes import ReasonCode, top_reasons
 from bastion.schemas.events import TransactionEvent
 from bastion.schemas.tables import ATTRIBUTE_PREFIX
 from bastion.training.bundle import ModelBundle
@@ -28,6 +32,8 @@ class ScoreResult:
     features: dict[str, Any]
     features_ms: float
     model_ms: float
+    inputs: npt.NDArray[np.float32]  # the encoded model row, kept for explanations
+    values: dict[str, object]  # the named inputs behind that row
 
 
 class Scorer:
@@ -63,4 +69,11 @@ class Scorer:
             features=features,
             features_ms=(assembled - started) / 1e6,
             model_ms=(finished - assembled) / 1e6,
+            inputs=row,
+            values=values,
         )
+
+    def explain(self, result: ScoreResult, *, k: int) -> list[ReasonCode]:
+        """Reason codes: the ``k`` inputs that raised this transaction's score the most."""
+        contributions = self.bundle.contributions_from_matrix(result.inputs)
+        return top_reasons(contributions[0], self.bundle.spec, result.values, k=k)

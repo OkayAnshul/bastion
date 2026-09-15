@@ -19,6 +19,7 @@ behind code that exists in this repository, using numbers measured on this proje
 | [3.1](phase-3/3.1-what-p99-means.md) | What p99 means and why the mean lies | `bastion.benchmarks.latency`, `benchmarks/k6/score.js` | written |
 | [3.2](phase-3/3.2-where-the-latency-went.md) | Where my 50 ms actually went | `bastion.benchmarks.profiling`, `bastion.features.definitions` | written |
 | [4.1](phase-4/4.1-expected-loss-under-a-review-budget.md) | Expected loss under a review budget | `bastion.policy.expected_loss`, `bastion.policy.decide`, `bastion.policy.sweep` | written; IEEE-CIS numbers pending |
+| [4.2](phase-4/4.2-shap-what-it-does-and-doesnt-prove.md) | SHAP: what it does and doesn't prove | `bastion.policy.reason_codes`, `ModelBundle.contributions_from_matrix` | written; latency cost unmeasured |
 | [4.3](phase-4/4.3-why-three-actions-beat-two.md) | Why three actions beat two | `bastion.policy.expected_loss`, `tests/unit/test_policy.py` | written |
 
 Also:

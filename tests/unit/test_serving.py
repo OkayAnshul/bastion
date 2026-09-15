@@ -15,8 +15,15 @@ from fastapi.testclient import TestClient
 
 from bastion.data.labels import label_events
 from bastion.evaluation.calibration import IsotonicCalibrator
+from bastion.evaluation.cost import load_cost_model
 from bastion.features.batch import compute_features, feature_names
 from bastion.features.online import OnlineFeatureStore, OnlineStoreConfig
+from bastion.policy.capacity import ReviewCapacity
+from bastion.policy.config import OverrideConfig
+from bastion.policy.decide import decide_expected_loss
+from bastion.policy.engine import PolicyParameters
+from bastion.policy.expected_loss import expected_costs
+from bastion.policy.overrides import overrides_for_rows
 from bastion.schemas.decisions import DecisionRecord
 from bastion.schemas.events import LabelEvent, TransactionEvent
 from bastion.schemas.tables import row_to_event
@@ -33,6 +40,11 @@ from bastion.training.dataset import (
 )
 from bastion.training.pipeline import fit_lightgbm_on_frame, labels_of, split_rows
 from tests.unit.test_training import LABELS, fast_model_config, small_splits, synthetic_events
+
+REPO_ROOT = Path(__file__).resolve().parents[2]
+COSTS = load_cost_model(REPO_ROOT / "configs")
+REVIEWS_PER_DAY = 2
+OVERRIDES = OverrideConfig(velocity_cap_1h=4)
 
 
 @pytest.fixture(scope="module")
@@ -64,13 +76,30 @@ def _post(client: TestClient, event: TransactionEvent) -> httpx.Response:
     )
 
 
-def _serving(bundle: ModelBundle, server: fakeredis.FakeServer, log_path: Path) -> ServingState:
+def _serving(
+    bundle: ModelBundle,
+    server: fakeredis.FakeServer,
+    log_path: Path,
+    *,
+    overrides: OverrideConfig = OVERRIDES,
+) -> ServingState:
+    client = fakeredis.FakeAsyncRedis(server=server, decode_responses=True)
+    policy = PolicyParameters(
+        reviews_per_day=REVIEWS_PER_DAY,
+        review_threshold=0.0,
+        costs=COSTS,
+        overrides=overrides,
+        reason_codes_top_k=3,
+        tuned=False,
+    )
     return ServingState(
         scorer=Scorer(bundle),
         model_version="test/1",
-        redis=fakeredis.FakeAsyncRedis(server=server, decode_responses=True),
+        redis=client,
         prefix="bastion",
         decisions=DecisionLogger(JsonlDecisionSink(log_path), flush_interval_s=0.05),
+        policy=policy,
+        capacity=ReviewCapacity(client, "bastion", REVIEWS_PER_DAY),
     )
 
 
@@ -88,7 +117,7 @@ def test_http_scores_equal_offline_model_scores_exactly(
     for row in events.iter_rows(named=True):
         writer.write_transaction(row_to_event(row))
 
-    test = split_rows(frame, "test").head(150)
+    test = split_rows(frame, "test").sort("event_ts", maintain_order=True).head(150)
     expected = bundle.predict_proba(test)
     by_id = {row["txn_id"]: row for row in events.iter_rows(named=True)}
     log_path = tmp_path / "decisions.jsonl"
@@ -97,12 +126,31 @@ def test_http_scores_equal_offline_model_scores_exactly(
     assert all(r.status_code == 200 for r in responses)
     np.testing.assert_array_equal([r.json()["fraud_probability"] for r in responses], expected)
 
+    # The policy decides exactly as offline evaluation would, overrides and review budget included.
+    rows = [by_id[txn_id] for txn_id in test["txn_id"]]
+    forced, _ = overrides_for_rows(
+        [row["card_id"] for row in rows],
+        [row["device_id"] for row in rows],
+        [row["merchant_id"] for row in rows],
+        test["card_txn_count_1h"].to_list(),
+        OVERRIDES,
+    )
+    offline = decide_expected_loss(
+        expected_costs(expected, test["amount"].to_numpy(), COSTS),
+        test["event_ts"].dt.epoch("d").to_numpy(),
+        threshold=0.0,
+        reviews_per_day=REVIEWS_PER_DAY,
+        forced=forced,
+    )
+    assert [r.json()["decision"]["action"] for r in responses] == offline.actions.tolist()
+
     # The lifespan drained the queue on shutdown: one decision record per request, nothing dropped.
     records = [
         DecisionRecord.model_validate_json(line) for line in log_path.read_text().splitlines()
     ]
     assert [r.txn_id for r in records] == test["txn_id"].to_list()
     assert all(r.timings.total_ms >= r.timings.redis_ms for r in records)
+    assert all(r.decision is not None for r in records)
 
 
 def test_a_request_carrying_a_label_is_rejected(
@@ -146,6 +194,32 @@ def test_an_exhausted_online_store_is_a_503_not_a_500(
         assert response.status_code == 503
         assert response.json() == {"detail": "online store unavailable"}
         assert client.get("/v1/model").json()["store_errors"] == 1
+
+
+def test_overrides_decide_first_and_blocked_payments_carry_reason_codes(
+    trained: tuple[ModelBundle, pl.DataFrame, pl.DataFrame, pl.DataFrame], tmp_path: Path
+) -> None:
+    bundle, events, _, _ = trained
+    event = row_to_event(events.row(0, named=True))
+    log_path = tmp_path / "decisions.jsonl"
+    state = _serving(
+        bundle,
+        fakeredis.FakeServer(),
+        log_path,
+        overrides=OverrideConfig(blocked_card_ids=frozenset({event.card_id})),
+    )
+    with TestClient(create_app(state)) as client:
+        decision = _post(client, event).json()["decision"]
+        assert client.get("/v1/model").json()["policy"]["reviews_per_day"] == REVIEWS_PER_DAY
+    assert decision["action"] == "block"
+    assert decision["override"] == "blocked_card"
+    assert len(decision["reason_codes"]) <= 3
+    assert all(code["contribution"] > 0 for code in decision["reason_codes"])
+    (record,) = [
+        DecisionRecord.model_validate_json(line) for line in log_path.read_text().splitlines()
+    ]
+    assert record.decision is not None
+    assert record.decision.action == "block"
 
 
 def test_a_model_needing_unknown_inputs_is_refused(

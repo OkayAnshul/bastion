@@ -293,6 +293,17 @@ conflict between this document and reality.
   window by total expected cost, which needs no labels. The two-threshold probability policy is kept
   as the baseline, tuned on the same objective and budget. Overrides (blocklists, an allowlist, an
   hourly velocity cap) run first and never use review capacity.
+- **Decisions in the scoring service (ADR-005).** `POST /v1/score` returns and logs a decision
+  next to the probability. Overrides come first; then `bastion.policy.engine.propose` prices
+  approve, review and block. A wanted review takes one of its event day's reviews from a Redis
+  counter shared by every worker (`<prefix>:policy:reviews:<day>`), and falls back to the cheaper of
+  approve and block once none is left. Reviewed and blocked transactions carry the top TreeSHAP
+  reason codes; approvals don't, so explanation time is spent only where a person will read it. The
+  review threshold comes from the file `bastion policy sweep` writes (`BASTION_POLICY_PATH`). The
+  service refuses a file tuned for another model, budget or cost set, and uses threshold 0 when no
+  file is given. One test replays a stream through the offline and online paths and requires
+  identical actions; the serving test requires HTTP decisions to equal the offline policy's. A Redis
+  failure while reserving a review answers 503, like a failed feature read.
 - **Raw event sink** *(deferred to Phase 6).* The Parquet sink that turns the stream into an offline
   store is built with the retraining loop, which is its first consumer. Until then, training reads
   the prepared event table directly.
