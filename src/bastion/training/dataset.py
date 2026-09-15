@@ -5,9 +5,10 @@ from __future__ import annotations
 import hashlib
 import json
 import re
-from collections.abc import Sequence
+from collections.abc import Mapping, Sequence
 from dataclasses import dataclass
 from datetime import datetime
+from functools import cached_property
 from pathlib import Path
 from typing import Any, Literal, cast
 
@@ -95,6 +96,14 @@ class FeatureSpec:
     def columns(self) -> tuple[str, ...]:
         return self.numeric + self.categorical_columns
 
+    @cached_property
+    def category_codes(self) -> dict[str, dict[str, float]]:
+        """Level to code, per categorical column; unseen levels get ``len(vocabulary)``."""
+        return {
+            column: {level: float(i) for i, level in enumerate(vocab)}
+            for column, vocab in self.categorical
+        }
+
     def to_dict(self) -> dict[str, Any]:
         return {
             "numeric": list(self.numeric),
@@ -176,3 +185,21 @@ def to_matrix(frame: pl.DataFrame, spec: FeatureSpec) -> npt.NDArray[np.float32]
             .alias(column)
         )
     return frame.select(exprs).to_numpy().astype(np.float32)
+
+
+def row_vector(values: Mapping[str, object], spec: FeatureSpec) -> npt.NDArray[np.float32]:
+    """One model input row from a mapping, with exactly ``to_matrix``'s encoding.
+
+    Serving builds rows one transaction at a time, without a DataFrame per request. A parity test
+    checks that every row equals ``to_matrix`` on the same values, so the encoding cannot drift.
+    """
+    row = np.empty((1, len(spec.columns)), dtype=np.float32)
+    for i, column in enumerate(spec.numeric):
+        value = values.get(column)
+        row[0, i] = np.nan if value is None else float(value)  # type: ignore[arg-type]
+    offset = len(spec.numeric)
+    for j, (column, vocab) in enumerate(spec.categorical):
+        value = values.get(column)
+        codes = spec.category_codes[column]
+        row[0, offset + j] = np.nan if value is None else codes.get(str(value), float(len(vocab)))
+    return row

@@ -25,6 +25,7 @@ the minimum. Labels are set members keyed by transaction id, so replaying a labe
 from __future__ import annotations
 
 import json
+from collections.abc import Sequence
 from dataclasses import dataclass
 from datetime import UTC, datetime, timedelta
 from typing import Any
@@ -32,6 +33,7 @@ from typing import Any
 import numpy as np
 import numpy.typing as npt
 import redis
+import redis.asyncio
 from pydantic import BaseModel, ConfigDict, Field
 
 from bastion.features.batch import (
@@ -63,6 +65,9 @@ DEVICE_HISTORY_MS = max(WINDOWS_MS[w] for w in (*DEVICE_COUNT_WINDOWS, *DEVICE_D
 _EPOCH = datetime(1970, 1, 1, tzinfo=UTC)
 _SECONDS_PER_DAY = 86_400
 
+# A Redis command as (method name, positional args, keyword args), replayable on any client.
+Command = tuple[str, tuple[Any, ...], dict[str, Any]]
+
 
 class OnlineStoreConfig(BaseModel):
     model_config = ConfigDict(extra="forbid", frozen=True)
@@ -76,6 +81,10 @@ class OnlineStoreConfig(BaseModel):
 def epoch_ms(ts: datetime) -> int:
     """Exact integer epoch milliseconds (``ts.timestamp() * 1000`` can be off by one)."""
     return (ts - _EPOCH) // timedelta(milliseconds=1)
+
+
+def _key(prefix: str, *parts: str) -> str:
+    return ":".join((prefix, *parts))
 
 
 @dataclass(frozen=True)
@@ -95,25 +104,86 @@ class OnlineSnapshot:
     all_fraud_labels: int
 
 
+def snapshot_commands(prefix: str, event: TransactionEvent) -> list[Command]:
+    """The commands one feature read needs, in the order ``snapshot_from_results`` expects.
+
+    Shared by the synchronous store and the asyncio scoring path, so both issue the same reads.
+    """
+    q = epoch_ms(event.event_ts)
+    before_q = f"({q}"
+    before_day = f"({q - q % MS_PER_DAY}"  # merchant rates: labels known by the start of the day
+    card, merchant = event.card_id, event.merchant_id
+    commands: list[Command] = [
+        (
+            "zrangebyscore",
+            (_key(prefix, "card", card, "events"), q - CARD_HISTORY_MS, before_q),
+            {"withscores": True},
+        ),
+        ("zscore", (_key(prefix, "first_seen", "card"), card), {}),
+        ("zscore", (_key(prefix, "card", card, "merchants"), merchant), {}),
+        ("zcount", (_key(prefix, "card", card, "fraud_labels"), "-inf", before_q), {}),
+        ("zcount", (_key(prefix, "merchant", merchant, "labels"), "-inf", before_day), {}),
+        ("zcount", (_key(prefix, "merchant", merchant, "fraud_labels"), "-inf", before_day), {}),
+        ("zcount", (_key(prefix, "labels", "all"), "-inf", before_day), {}),
+        ("zcount", (_key(prefix, "labels", "fraud"), "-inf", before_day), {}),
+    ]
+    if event.device_id is not None:
+        device = event.device_id
+        commands += [
+            (
+                "zrangebyscore",
+                (_key(prefix, "device", device, "events"), q - DEVICE_HISTORY_MS, before_q),
+                {"withscores": True},
+            ),
+            ("zscore", (_key(prefix, "first_seen", "device"), device), {}),
+            ("zscore", (_key(prefix, "card", card, "devices"), device), {}),
+        ]
+    return commands
+
+
+def snapshot_from_results(event: TransactionEvent, results: Sequence[Any]) -> OnlineSnapshot:
+    has_device = event.device_id is not None
+    return OnlineSnapshot(
+        card_events=list(results[0]),
+        card_first_seen=results[1],
+        card_merchant_first_seen=results[2],
+        card_fraud_labels=int(results[3]),
+        merchant_labels=int(results[4]),
+        merchant_fraud_labels=int(results[5]),
+        all_labels=int(results[6]),
+        all_fraud_labels=int(results[7]),
+        device_events=list(results[8]) if has_device else None,
+        device_first_seen=results[9] if has_device else None,
+        card_device_first_seen=results[10] if has_device else None,
+    )
+
+
+async def read_snapshot_async(
+    client: redis.asyncio.Redis, prefix: str, event: TransactionEvent
+) -> OnlineSnapshot:
+    """The same single-round-trip read on an asyncio client, for the scoring service."""
+    pipe = client.pipeline(transaction=False)
+    for name, args, kwargs in snapshot_commands(prefix, event):
+        getattr(pipe, name)(*args, **kwargs)
+    return snapshot_from_results(event, await pipe.execute())
+
+
 class OnlineFeatureStore:
     def __init__(self, client: redis.Redis, config: OnlineStoreConfig) -> None:
         self.client = client
         self.config = config
 
     def _key(self, *parts: str) -> str:
-        return ":".join((self.config.prefix, *parts))
+        return _key(self.config.prefix, *parts)
 
     # -------------------------------------------------------------------------- write path
 
     def write_transaction(self, event: TransactionEvent) -> None:
         """Record one transaction. Idempotent: rewriting the same event changes nothing."""
         ts = epoch_ms(event.event_ts)
-        history_ttl = int(
-            (CARD_HISTORY_MS / 1000) + self.config.history_ttl_slack_days * _SECONDS_PER_DAY
-        )
-        device_ttl = int(
-            (DEVICE_HISTORY_MS / 1000) + self.config.history_ttl_slack_days * _SECONDS_PER_DAY
-        )
+        slack = self.config.history_ttl_slack_days * _SECONDS_PER_DAY
+        history_ttl = int(CARD_HISTORY_MS / 1000 + slack)
+        device_ttl = int(DEVICE_HISTORY_MS / 1000 + slack)
         lifetime_ttl = int(self.config.lifetime_ttl_days * _SECONDS_PER_DAY)
 
         pipe = self.client.pipeline(transaction=False)
@@ -163,51 +233,10 @@ class OnlineFeatureStore:
 
     def snapshot(self, event: TransactionEvent) -> OnlineSnapshot:
         """Fetch a transaction's context in one pipelined round trip, as of its event time."""
-        q = epoch_ms(event.event_ts)
-        before_q = f"({q}"
-        before_day = (
-            f"({q - q % MS_PER_DAY}"  # merchant rates use labels known by the start of the day
-        )
-
         pipe = self.client.pipeline(transaction=False)
-        pipe.zrangebyscore(
-            self._key("card", event.card_id, "events"),
-            q - CARD_HISTORY_MS,
-            before_q,
-            withscores=True,
-        )
-        pipe.zscore(self._key("first_seen", "card"), event.card_id)
-        pipe.zscore(self._key("card", event.card_id, "merchants"), event.merchant_id)
-        pipe.zcount(self._key("card", event.card_id, "fraud_labels"), "-inf", before_q)
-        pipe.zcount(self._key("merchant", event.merchant_id, "labels"), "-inf", before_day)
-        pipe.zcount(self._key("merchant", event.merchant_id, "fraud_labels"), "-inf", before_day)
-        pipe.zcount(self._key("labels", "all"), "-inf", before_day)
-        pipe.zcount(self._key("labels", "fraud"), "-inf", before_day)
-        if event.device_id is not None:
-            pipe.zrangebyscore(
-                self._key("device", event.device_id, "events"),
-                q - DEVICE_HISTORY_MS,
-                before_q,
-                withscores=True,
-            )
-            pipe.zscore(self._key("first_seen", "device"), event.device_id)
-            pipe.zscore(self._key("card", event.card_id, "devices"), event.device_id)
-        results: list[Any] = pipe.execute()
-
-        has_device = event.device_id is not None
-        return OnlineSnapshot(
-            card_events=results[0],
-            card_first_seen=results[1],
-            card_merchant_first_seen=results[2],
-            card_fraud_labels=int(results[3]),
-            merchant_labels=int(results[4]),
-            merchant_fraud_labels=int(results[5]),
-            all_labels=int(results[6]),
-            all_fraud_labels=int(results[7]),
-            device_events=results[8] if has_device else None,
-            device_first_seen=results[9] if has_device else None,
-            card_device_first_seen=results[10] if has_device else None,
-        )
+        for name, args, kwargs in snapshot_commands(self.config.prefix, event):
+            getattr(pipe, name)(*args, **kwargs)
+        return snapshot_from_results(event, pipe.execute())
 
     def read_features(
         self, event: TransactionEvent, *, label_strength: float = DEFAULT_LABEL_STRENGTH
@@ -228,6 +257,12 @@ def _first_seen(score: float | None) -> npt.NDArray[np.int64]:
 
 def _scalar(value: float) -> float | None:
     return None if np.isnan(value) else float(value)
+
+
+def _codes(values: list[str]) -> npt.NDArray[np.int64]:
+    """Local integer codes; distinct counts do not depend on which code a value gets."""
+    lookup: dict[str, int] = {}
+    return np.array([lookup.setdefault(v, len(lookup)) for v in values], dtype=np.int64)
 
 
 def features_from_snapshot(
@@ -293,9 +328,7 @@ def features_from_snapshot(
     else:
         device_ts = np.array([int(score) for _, score in snapshot.device_events], dtype=np.int64)
         device_entity = np.zeros(device_ts.size, dtype=np.int64)
-        card_codes = _codes(
-            [json.loads(_decode(member))[1] for member, _ in snapshot.device_events]
-        )
+        card_codes = _codes([json.loads(_decode(m))[1] for m, _ in snapshot.device_events])
         ones = np.ones(device_ts.size, dtype=np.int64)
         for name in DEVICE_COUNT_WINDOWS:
             agg = window_aggregates(device_entity, device_ts, ones, one, q, WINDOWS_MS[name])
@@ -338,9 +371,3 @@ def features_from_snapshot(
     )
     out["merchant_known_fraud_rate"] = _scalar(rate[0])
     return out
-
-
-def _codes(values: list[str]) -> npt.NDArray[np.int64]:
-    """Local integer codes; distinct counts do not depend on which code a value gets."""
-    lookup: dict[str, int] = {}
-    return np.array([lookup.setdefault(v, len(lookup)) for v in values], dtype=np.int64)

@@ -139,3 +139,35 @@ function it calls. And keep derived lists derived.
 
 **What the bug teaches.** An optimisation that copies knowledge ("which columns are needed") creates a
 second place that must change. The bug shows up in whichever copy nobody tests.
+
+---
+
+## 2026-09-15: A validation test that passed for the wrong reason
+
+**Phase:** 3 · **Commit(s):** `feat: add FastAPI scoring service with exact offline parity`
+
+**Symptom.** The new end-to-end serving test failed because not every `POST /v1/score` returned 200.
+A second test, "a request carrying a label is rejected", passed.
+
+**Initial hypothesis.** Something in the scoring path was raising: the asyncio Redis pipeline on the
+fake server, or a feature value that the decision record could not serialise.
+
+**Actual cause.** Neither. Replaying one request showed that all 20 test requests returned **422**
+before any scoring code ran: `"Input should be a valid dictionary or object to extract fields from"`.
+The tests sent the JSON body as raw `content` with no `Content-Type: application/json` header, so
+FastAPI received a string, not an object. The label-rejection test expected a 422 and got one, but
+from the missing header, not from the rule that `is_fraud` must be null at scoring time. It would have
+kept passing if that rule were deleted.
+
+**Fix.** One `_post` helper sends the header. The label test now also asserts the specific validation
+message (`null at scoring time`), so it can only pass for the right reason. With requests reaching the
+handler, HTTP scores equal the offline model's scores exactly.
+
+**How we could have detected it earlier.**
+- Assert *why* a request failed, not only its status code. A status alone matches many failures.
+- Make a negative test fail first on purpose (delete the validator, watch the test fail) before trusting
+  it.
+- Send test traffic the way real clients do. The load-test script sets the header; the unit test did not.
+
+**What the bug teaches.** A test that checks only "it failed" is satisfied by any failure. The bugs it
+lets through are exactly the ones it was written to catch.

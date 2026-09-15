@@ -8,6 +8,10 @@ topics:
   labels:
     name: transactions.labels
     partitions: 6
+  # Every scored transaction, for monitoring and the analyst console. Keyed by card id.
+  decisions:
+    name: decisions.log
+    partitions: 3
 
 consumer_group: bastion-feature-builder
 

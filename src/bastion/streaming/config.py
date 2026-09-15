@@ -22,6 +22,7 @@ class Topics(BaseModel):
 
     transactions: TopicConfig
     labels: TopicConfig
+    decisions: TopicConfig = TopicConfig(name="decisions.log", partitions=3)
 
 
 class StreamingConfig(BaseModel):

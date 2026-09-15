@@ -53,6 +53,13 @@ class ModelBundle:
     def raw_scores(self, frame: pl.DataFrame) -> npt.NDArray[np.float64]:
         return np.asarray(self._booster.predict(to_matrix(frame, self.spec)), dtype=np.float64)
 
+    def raw_scores_from_matrix(self, x: npt.NDArray[np.float32]) -> npt.NDArray[np.float64]:
+        """Raw scores for rows already encoded with the bundle's spec, on one thread per call.
+
+        The scoring service parallelises across requests, not inside a single-row prediction.
+        """
+        return np.asarray(self._booster.predict(x, num_threads=1), dtype=np.float64)
+
     def predict_proba(self, frame: pl.DataFrame) -> npt.NDArray[np.float64]:
         """Calibrated fraud probabilities (ADR-006): the only scores the policy engine may use."""
         return self.calibrator.predict(self.raw_scores(frame))

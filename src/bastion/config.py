@@ -33,6 +33,13 @@ class Settings(BaseSettings):
     # Local sqlite tracking by default; docker compose points containers at http://mlflow:5000.
     mlflow_tracking_uri: str = "sqlite:///mlruns/mlflow.db"
 
+    # Scoring service (Phase 3). A local bundle directory overrides the MLflow registry.
+    model_path: Path | None = None
+    model_name: str = "bastion-fraud"
+    model_alias: str = "champion"
+    decision_sink: str = "jsonl"  # jsonl | kafka | none
+    decision_log_path: Path = Path("artifacts/decisions/decisions.jsonl")
+
     log_level: str = "INFO"
     log_json: bool = False
 
