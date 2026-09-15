@@ -169,6 +169,13 @@ def train(
     events: EventsOption = None,
     out_dir: OutDirOption = None,
     dataset: DatasetOption = "IEEE-CIS",
+    register: Annotated[
+        bool,
+        typer.Option(
+            "--register/--no-register",
+            help="Register the bundle in MLflow (first version becomes champion).",
+        ),
+    ] = False,
 ) -> None:
     """Train, calibrate and evaluate LightGBM on point-in-time features; log it all to MLflow."""
     from bastion.data.labels import load_label_delay_config
@@ -193,6 +200,7 @@ def train(
         results_dir=_results_dir(out_dir, "phase1"),
         artifacts_dir=settings.artifacts_dir,
         tracking_uri=settings.mlflow_tracking_uri,
+        register_as=settings.model_name if register else None,
     )
     typer.echo(
         f"wrote {result.report_path} · MLflow run {result.run_id} · bundle {result.bundle_dir}"
@@ -313,3 +321,25 @@ def stream_features(
         idle_timeout_s=idle_timeout,
     )
     typer.echo(f"processed {processed:,} messages")
+
+
+# ------------------------------------------------------------------------------ phase 3
+
+
+@app.command()
+def serve(
+    host: Annotated[str, typer.Option(help="Interface to bind.")] = "127.0.0.1",
+    port: Annotated[int, typer.Option(help="Port to bind.")] = 8000,
+    workers: Annotated[int, typer.Option(help="Worker processes.")] = 1,
+) -> None:
+    """Run the scoring service: POST /v1/score, GET /healthz, /readyz, /v1/model."""
+    import uvicorn
+
+    uvicorn.run(
+        "bastion.serving.app:create_app",
+        factory=True,
+        host=host,
+        port=port,
+        workers=workers,
+        log_level="warning",
+    )

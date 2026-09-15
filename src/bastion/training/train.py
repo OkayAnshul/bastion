@@ -59,6 +59,7 @@ from bastion.training.pipeline import (
     labels_of,
     split_rows,
 )
+from bastion.training.registry import RegisteredModel, register_bundle
 from bastion.training.tracking import (
     configure_tracking,
     data_fingerprint,
@@ -104,6 +105,7 @@ class TrainingResult:
     bundle_dir: Path
     calibration: CalibrationChoice
     metrics: dict[str, dict[str, float]]
+    registered: RegisteredModel | None = None
 
 
 def choose_calibration(
@@ -119,7 +121,12 @@ def choose_calibration(
 
 
 def train_model(
-    inputs: TrainingInputs, *, results_dir: Path, artifacts_dir: Path, tracking_uri: str
+    inputs: TrainingInputs,
+    *,
+    results_dir: Path,
+    artifacts_dir: Path,
+    tracking_uri: str,
+    register_as: str | None = None,
 ) -> TrainingResult:
     cfg = inputs.model
     labels = label_events(inputs.events, inputs.labels)
@@ -198,9 +205,10 @@ def train_model(
         )
 
         mlflow.log_artifacts(str(bundle_dir), "bundle")
+        registered = register_bundle(bundle_dir, register_as) if register_as else None
         for path in (report, report.with_suffix(".json"), *(figures / f for f in FIGURES)):
             mlflow.log_artifact(str(path), "report")
-    return TrainingResult(run_id, report, bundle_dir, choice, metrics)
+    return TrainingResult(run_id, report, bundle_dir, choice, metrics, registered)
 
 
 def _metrics(

@@ -112,6 +112,27 @@ services:
       feature-builder:
         condition: service_started
 
+  # POST /v1/score. Loads the MLflow champion at startup; register one first, e.g.
+  # `docker compose run --rm app train --events data/processed/events_synthetic.parquet --register`.
+  scoring:
+    <<: *bastion-app
+    profiles: ["demo"]
+    command: ["serve", "--host", "0.0.0.0", "--port", "8000"]
+    environment:
+      BASTION_REDIS_URL: redis://redis:6379/0
+      BASTION_KAFKA_BOOTSTRAP: redpanda:9092
+      BASTION_MLFLOW_TRACKING_URI: http://mlflow:5000
+      BASTION_DECISION_SINK: kafka
+    ports:
+      - "8000:8000"
+    depends_on:
+      redis:
+        condition: service_healthy
+      redpanda:
+        condition: service_healthy
+      mlflow:
+        condition: service_healthy
+
 volumes:
   redpanda-data:
   mlflow-data:
