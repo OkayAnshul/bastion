@@ -39,6 +39,9 @@ class Settings(BaseSettings):
     model_alias: str = "champion"
     decision_sink: str = "jsonl"  # jsonl | kafka | none
     decision_log_path: Path = Path("artifacts/decisions/decisions.jsonl")
+    # Concurrent Redis connections per worker. redis-py's asyncio pool raises instead of waiting
+    # once all are in use, and the score handler answers 503.
+    redis_max_connections: int = 100
 
     log_level: str = "INFO"
     log_json: bool = False

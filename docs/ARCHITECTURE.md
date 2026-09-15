@@ -274,6 +274,15 @@ conflict between this document and reality.
   so it includes time spent waiting for the single event loop. Client, service and Redis share one
   laptop, and every report states the machine. `bastion bench report` re-renders a recorded run's
   report and figures without re-measuring anything, keeping the git revision it was measured at.
+- **Overload behaviour (§3.3).** Each worker holds at most `BASTION_REDIS_MAX_CONNECTIONS` Redis
+  connections (default 100, the same as redis-py's). When all of them are in use, redis-py's asyncio
+  pool raises instead of waiting. At 800 requests/s on one worker that became unhandled
+  `MaxConnectionsError`s: 6,106 in the service log of the first benchmark run. Each one was a 500
+  with a logged traceback, which is extra work for a process that is already saturated. The score
+  handler now answers **503 `online store unavailable`** to any Redis connection or timeout error,
+  without a traceback, and counts it as `store_errors` in `GET /v1/model`. What the payment flow does
+  after a 503 (fall back to rules, approve under a limit, or decline) is a Phase 4 policy decision.
+  The service never returns a score computed without its features.
 - **Raw event sink** *(deferred to Phase 6).* The Parquet sink that turns the stream into an offline
   store is built with the retraining loop, which is its first consumer. Until then, training reads
   the prepared event table directly.

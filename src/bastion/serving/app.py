@@ -18,7 +18,7 @@ from dataclasses import dataclass
 from datetime import UTC, datetime
 
 import redis.asyncio
-from fastapi import FastAPI, Request, Response
+from fastapi import FastAPI, HTTPException, Request, Response
 
 from bastion.config import get_settings
 from bastion.features.online import read_snapshot_async
@@ -41,6 +41,7 @@ class ServingState:
     redis: redis.asyncio.Redis
     prefix: str
     decisions: DecisionLogger
+    store_errors: int = 0  # score requests answered 503 because Redis was unavailable
 
 
 def _decision_sink() -> DecisionSink:
@@ -73,7 +74,11 @@ def _build_state() -> ServingState:
     return ServingState(
         scorer=Scorer(bundle),
         model_version=version,
-        redis=redis.asyncio.Redis.from_url(settings.redis_url, decode_responses=True),
+        redis=redis.asyncio.Redis.from_url(
+            settings.redis_url,
+            decode_responses=True,
+            max_connections=settings.redis_max_connections,
+        ),
         prefix=load_streaming_config().online_store.prefix,
         decisions=DecisionLogger(_decision_sink()),
     )
@@ -100,7 +105,14 @@ def create_app(state: ServingState | None = None) -> FastAPI:
     async def score(event: ScoreRequest, request: Request) -> ScoreResponse:
         serving: ServingState = request.app.state.serving
         started = time.perf_counter_ns()
-        snapshot = await read_snapshot_async(serving.redis, serving.prefix, event)
+        try:
+            snapshot = await read_snapshot_async(serving.redis, serving.prefix, event)
+        except (redis.ConnectionError, redis.TimeoutError) as exc:
+            # Includes an exhausted connection pool under overload. A 503 tells the caller to use
+            # its fallback (a Phase 4 policy decision), and unlike an unhandled error it doesn't
+            # make an already saturated process format a traceback for every rejected request.
+            serving.store_errors += 1
+            raise HTTPException(status_code=503, detail="online store unavailable") from exc
         fetched = time.perf_counter_ns()
         result = serving.scorer.score(event, snapshot)
         timings = StageTimings(
@@ -156,6 +168,7 @@ def create_app(state: ServingState | None = None) -> FastAPI:
             "spec_fingerprint": serving.scorer.bundle.spec.fingerprint(),
             "inputs": len(serving.scorer.bundle.spec.columns),
             "decision_log": serving.decisions.stats(),
+            "store_errors": serving.store_errors,
         }
 
     return app

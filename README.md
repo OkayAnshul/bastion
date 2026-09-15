@@ -72,7 +72,7 @@ Full design, component contracts, latency budget and ADRs: [`docs/ARCHITECTURE.m
 | Leakage experiment: naive vs point-in-time PR-AUC | unmeasured |
 | Calibration: Brier score, reliability curve | unmeasured |
 | Batch/stream feature parity | exact equality through Redpanda + Redis in CI (synthetic events; see learning log 2.4) |
-| Scoring latency p50 / p95 / p99, throughput | one worker on a laptop: 400 requests/s sustained at p50 2.31 ms, p95 4.60 ms, p99 6.17 ms; 800 requests/s not sustained ([report](docs/results/phase3/latency.md)) |
+| Scoring latency p50 / p95 / p99, throughput | one worker on a laptop: 400 requests/s sustained at p50 2.31 ms, p95 4.60 ms, p99 6.17 ms; 800 requests/s not sustained, with requests beyond the Redis connection pool answered 503 ([report](docs/results/phase3/latency.md)) |
 | Fraud value caught vs review budget | unmeasured |
 | Graph feature lift | unmeasured |
 | Drift detection and recovery | unmeasured |
@@ -86,7 +86,7 @@ Measured with k6 at a constant arrival rate against one service worker. k6, the 
 shared one laptop (Intel i7-1255U), and the payloads and Redis history are synthetic (271,529 events).
 At 400 requests/s, the highest rate sustained with no dropped or failed requests, client-side
 latency was **p50 2.31 ms, p95 4.60 ms, p99 6.17 ms** against a 50 ms p99 budget. At 800 requests/s
-one worker does not keep up. Full report: [`docs/results/phase3/latency.md`](docs/results/phase3/latency.md).
+one worker does not keep up; requests that cannot get a Redis connection get a 503, not an error. Full report: [`docs/results/phase3/latency.md`](docs/results/phase3/latency.md).
 
 **Slowest component: online feature evaluation.** Profiling the running service under load put 40%
 of samples in feature evaluation and 5% in LightGBM. Most of that feature time went to input

@@ -135,8 +135,35 @@ What this shows, and what it doesn't:
   reversed between the first pair and the repeats, and the improvement appeared both times.
 - **Direction only.** Three repeats are enough to show a consistent direction, not to put a
   confidence interval on a p99.
-- **800 requests/s is not sustained by either version** on one worker. See the rows marked "no" in
-  both reports.
+- **800 requests/s is not sustained by either version** on one worker. See *Overload* below.
+
+## Overload: 800 requests/s
+
+One worker does not sustain 800 requests/s with either version of the feature code. What mattered
+is *how* it failed. The reports count the HTTP status of every request k6 sent, where 0 means no
+response. Full reports: [before](before/latency.md), [after](latency.md),
+[after, with 503 handling](overload/latency.md).
+
+| Run | Requests | 200 | 500 | 503 | No response | Dropped | p50 ms | p99 ms |
+|---|---|---|---|---|---|---|---|---|
+| Before the feature fix | 23,734 | 15,193 | 6,106 | 0 | 2,435 | 267 | 343.10 | 680.86 |
+| After the feature fix | 23,814 | 22,789 | 727 | 0 | 298 | 187 | 104.41 | 403.63 |
+| After the feature fix, with 503 handling | 23,792 | 23,238 | 0 | 554 | 0 | 208 | 35.14 | 395.81 |
+
+- **Every 500 was an unhandled `redis.exceptions.MaxConnectionsError`.** The two service logs hold
+  exactly 6,106 and 727 of them. redis-py's asyncio pool holds 100 connections by default and raises
+  instead of waiting when all are in use. That happens once more than 100 requests are in flight on
+  a saturated event loop.
+- **Each 500 also logged a full traceback.** That is extra CPU work in a process that was already
+  saturated.
+- **The change.** The pool size is now a setting (`BASTION_REDIS_MAX_CONNECTIONS`, default 100).
+  The score handler answers Redis connection and timeout errors with `503 online store unavailable`,
+  counts them as `store_errors` in `GET /v1/model`, and logs no traceback. In the run with that
+  change, the service log held no tracebacks, `store_errors` was 554 (matching the 503s k6 saw), and
+  every other request succeeded.
+- **Single overload runs vary a lot.** The latency columns do not show that 503 handling made the
+  service faster; the claim is only about how requests fail. The disappearance of no-response
+  failures (298 to 0) fits with less work per rejected request, but one run cannot establish it.
 
 ## Reproduce
 

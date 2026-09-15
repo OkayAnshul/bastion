@@ -1,6 +1,6 @@
 # Scoring latency: POST /v1/score
 
-Measured by `bastion bench latency` at git revision `0e24265-dirty`. Client and server ran on the same laptop, so the client competes with the service for CPU.
+Measured by `bastion bench latency` at git revision `083d588-dirty`. Client and server ran on the same laptop, so the client competes with the service for CPU.
 
 ## Machine
 
@@ -22,7 +22,7 @@ Measured by `bastion bench latency` at git revision `0e24265-dirty`. Client and 
 | Model | local/da7db7ba6d194aae8cddbe1d35519fc3 (37 inputs), synthetic training data |
 | Online store | Redis 8.6.6 in a rootless Podman container, host network |
 | History in Redis | 271,529 events and 248,582 labels |
-| Requests | 20000 synthetic payloads, cycled |
+| Requests | 20,000 synthetic payloads, cycled |
 | Load generator | k6 (docker.io/grafana/k6:1.8.1) in a container, host network, constant arrival rate |
 | Per rate | 30 s, after one 10 s warm-up run |
 
@@ -32,25 +32,20 @@ Client latency is measured by k6 from request start to response end; server stag
 
 | Target rps | Achieved rps | Sustained | Dropped | Errors | HTTP status | p50 ms | p95 ms | p99 ms | max ms | server p99 ms |
 |---|---|---|---|---|---|---|---|---|---|---|
-| 25 | 25.0 | yes | 0 | 0.00% | 200: 751 | 7.30 | 9.03 | 9.43 | 10.61 | 7.30 |
-| 50 | 50.0 | yes | 0 | 0.00% | 200: 1,501 | 6.75 | 8.77 | 9.45 | 61.04 | 7.31 |
-| 100 | 100.0 | yes | 0 | 0.00% | 200: 3,001 | 4.32 | 6.88 | 7.72 | 8.83 | 6.29 |
-| 200 | 200.0 | yes | 0 | 0.00% | 200: 6,001 | 2.96 | 5.32 | 6.04 | 11.42 | 4.82 |
-| 400 | 399.9 | yes | 0 | 0.00% | 200: 12,001 | 3.36 | 9.17 | 33.16 | 100.16 | 22.43 |
-| 800 | 783.2 | no | 267 | 35.99% | 0: 2,435 · 200: 15,193 · 500: 6,106 | 343.10 | 614.45 | 680.86 | 924.56 | 414.90 |
+| 800 | 787.2 | no | 208 | 2.33% | 200: 23,238 · 503: 554 | 35.14 | 351.12 | 395.81 | 789.16 | 277.27 |
 
 ![Latency by arrival rate](figures/latency_vs_rate.png)
 
-## Stage breakdown at 400 requests/s
+## Stage breakdown at 800 requests/s
 
-Client p99 **33.16 ms** against the 50 ms budget: within budget at this rate.
+Client p99 **395.81 ms** against the 50 ms budget: over budget at this rate.
 
 | Stage | Budget (p99) | p50 ms | p95 ms | p99 ms | max ms |
 |---|---|---|---|---|---|
-| Redis round trip + event-loop wait | 12 ms | 0.67 | 4.79 | 21.28 | 90.32 |
-| Feature evaluation + row | 4 ms | 0.83 | 1.80 | 2.13 | 3.23 |
-| LightGBM + calibration | 8 ms | 0.15 | 0.27 | 0.38 | 1.27 |
-| Handler total | n/a | 2.31 | 6.19 | 22.43 | 91.17 |
+| Redis round trip + event-loop wait | 12 ms | 21.64 | 236.19 | 276.72 | 715.26 |
+| Feature evaluation + row | 4 ms | 0.42 | 0.56 | 0.95 | 2.38 |
+| LightGBM + calibration | 8 ms | 0.11 | 0.23 | 0.32 | 1.47 |
+| Handler total | n/a | 22.26 | 236.74 | 277.27 | 715.75 |
 
 The Redis stage runs from the start of the handler until the pipeline's replies have been processed. With one event-loop thread per worker, it therefore also includes time a request waits while other requests run feature evaluation, which is why its tail grows with load.
 

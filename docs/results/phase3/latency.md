@@ -28,16 +28,16 @@ Measured by `bastion bench latency` at git revision `0e24265-dirty`. Client and 
 
 ## Results by arrival rate
 
-Client latency is measured by k6 from request start to response end; server stages come from the decision log of the same requests. **Sustained** means every scheduled request started, none failed, and the achieved rate stayed within 2% of the target.
+Client latency is measured by k6 from request start to response end; server stages come from the decision log of the same requests. **Sustained** means every scheduled request started, none failed, and the achieved rate stayed within 2% of the target. HTTP status 0 means k6 received no response (connection reset or timeout).
 
-| Target rps | Achieved rps | Sustained | Dropped | Errors | p50 ms | p95 ms | p99 ms | max ms | server p99 ms |
-|---|---|---|---|---|---|---|---|---|---|
-| 25 | 25.0 | yes | 0 | 0.00% | 6.58 | 8.01 | 8.91 | 10.70 | 6.42 |
-| 50 | 50.0 | yes | 0 | 0.00% | 6.20 | 7.65 | 8.07 | 10.49 | 5.87 |
-| 100 | 100.0 | yes | 0 | 0.00% | 4.48 | 6.13 | 6.68 | 56.79 | 5.09 |
-| 200 | 200.0 | yes | 0 | 0.00% | 2.71 | 4.65 | 5.23 | 9.24 | 3.95 |
-| 400 | 400.0 | yes | 0 | 0.00% | 2.31 | 4.60 | 6.17 | 12.36 | 4.31 |
-| 800 | 788.0 | no | 187 | 4.30% | 104.41 | 347.53 | 403.63 | 803.26 | 277.36 |
+| Target rps | Achieved rps | Sustained | Dropped | Errors | HTTP status | p50 ms | p95 ms | p99 ms | max ms | server p99 ms |
+|---|---|---|---|---|---|---|---|---|---|---|
+| 25 | 25.0 | yes | 0 | 0.00% | 200: 750 | 6.58 | 8.01 | 8.91 | 10.70 | 6.42 |
+| 50 | 50.0 | yes | 0 | 0.00% | 200: 1,501 | 6.20 | 7.65 | 8.07 | 10.49 | 5.87 |
+| 100 | 100.0 | yes | 0 | 0.00% | 200: 3,001 | 4.48 | 6.13 | 6.68 | 56.79 | 5.09 |
+| 200 | 200.0 | yes | 0 | 0.00% | 200: 6,001 | 2.71 | 4.65 | 5.23 | 9.24 | 3.95 |
+| 400 | 400.0 | yes | 0 | 0.00% | 200: 12,001 | 2.31 | 4.60 | 6.17 | 12.36 | 4.31 |
+| 800 | 788.0 | no | 187 | 4.30% | 0: 298 · 200: 22,789 · 500: 727 | 104.41 | 347.53 | 403.63 | 803.26 | 277.36 |
 
 ![Latency by arrival rate](figures/latency_vs_rate.png)
 

@@ -1,12 +1,16 @@
 """The scoring service end to end: HTTP scores must equal the offline model's scores."""
 
+from collections.abc import Callable
 from pathlib import Path
+from typing import Self, cast
 
 import fakeredis
 import httpx
 import numpy as np
 import polars as pl
 import pytest
+import redis.asyncio
+import redis.exceptions
 from fastapi.testclient import TestClient
 
 from bastion.data.labels import label_events
@@ -114,6 +118,34 @@ def test_a_request_carrying_a_label_is_rejected(
         assert "null at scoring time" in response.text  # rejected for the right reason
         assert client.get("/healthz").json() == {"status": "ok"}
         assert client.get("/readyz").status_code == 200
+
+
+class _ExhaustedRedis:
+    """An async Redis client whose connection pool is used up, as under overload."""
+
+    def pipeline(self, transaction: bool = True) -> Self:
+        return self
+
+    def __getattr__(self, command: str) -> Callable[..., Self]:
+        return lambda *args, **kwargs: self
+
+    async def execute(self) -> list[object]:
+        raise redis.exceptions.MaxConnectionsError("Too many connections")
+
+
+def test_an_exhausted_online_store_is_a_503_not_a_500(
+    trained: tuple[ModelBundle, pl.DataFrame, pl.DataFrame, pl.DataFrame], tmp_path: Path
+) -> None:
+    # Regression: at 800 requests/s redis-py's pool (100 connections) ran out and every extra
+    # request became a 500 with a logged traceback, adding work to an already saturated process.
+    bundle, events, _, _ = trained
+    serving = _serving(bundle, fakeredis.FakeServer(), tmp_path / "d.jsonl")
+    serving.redis = cast(redis.asyncio.Redis, _ExhaustedRedis())
+    with TestClient(create_app(serving), raise_server_exceptions=False) as client:
+        response = _post(client, row_to_event(events.row(0, named=True)))
+        assert response.status_code == 503
+        assert response.json() == {"detail": "online store unavailable"}
+        assert client.get("/v1/model").json()["store_errors"] == 1
 
 
 def test_a_model_needing_unknown_inputs_is_refused(

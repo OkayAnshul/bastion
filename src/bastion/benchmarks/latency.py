@@ -22,13 +22,15 @@ import platform
 import shutil
 import subprocess
 import time
-from dataclasses import asdict, dataclass, fields
+from collections import Counter
+from dataclasses import asdict, dataclass, field, fields, replace
 from pathlib import Path
 from typing import Any
 
 import numpy as np
 import numpy.typing as npt
 import polars as pl
+from matplotlib.axis import Axis
 from matplotlib.ticker import NullFormatter
 
 from bastion.data.labels import LabelDelayConfig, label_events
@@ -45,6 +47,7 @@ BUDGET_P99_MS = 50.0  # ARCHITECTURE.md §3.3
 STAGE_BUDGETS_MS = {"redis_ms": 12.0, "features_ms": 4.0, "model_ms": 8.0}
 REPORT_STEM = "latency"
 FIGURES = ("latency_vs_rate.png", "latency_histogram.png")
+LOG_TICKS_MS = (0.5, 1, 2, 5, 10, 20, 50, 100, 200, 500, 1000, 2000)
 
 
 def prepare_benchmark(
@@ -83,6 +86,8 @@ class RateResult:
     dropped_iterations: int
     client_ms: dict[str, float]  # from k6: avg, med, p(90), p(95), p(99), max
     server_ms: dict[str, dict[str, float]]  # stage -> p50 / p95 / p99 / max
+    # HTTP status -> requests, from k6's samples; "0" means no response.
+    status_counts: dict[str, int] = field(default_factory=dict)
 
     @property
     def sustained(self) -> bool:
@@ -128,6 +133,15 @@ def _client_latencies(csv_path: Path) -> npt.NDArray[np.float64]:
             if row["metric_name"] == "http_req_duration"
         ]
     return np.asarray(values, dtype=np.float64)
+
+
+def _status_counts(csv_path: Path) -> dict[str, int]:
+    counts: Counter[str] = Counter()
+    with csv_path.open() as fh:
+        for row in csv.DictReader(fh):
+            if row["metric_name"] == "http_reqs":
+                counts[row["status"]] += 1
+    return dict(sorted(counts.items()))
 
 
 def _line_count(path: Path) -> int:
@@ -188,6 +202,7 @@ def run_latency_benchmark(
                     stage: _percentiles([getattr(r.timings, stage) for r in records])
                     for stage in ("redis_ms", "features_ms", "model_ms", "total_ms")
                 },
+                status_counts=_status_counts(raw_dir / f"rate_{rate}.csv"),
             )
         )
     return results
@@ -224,6 +239,13 @@ def hardware_description() -> dict[str, str]:
 # ------------------------------------------------------------------------------ report
 
 
+def _plain_log_ticks(axis: Axis, lower: float, upper: float) -> None:
+    """1-2-5 ticks labelled in plain milliseconds on a log axis, not scientific notation."""
+    ticks = [t for t in LOG_TICKS_MS if lower <= t <= upper]
+    axis.set_ticks(ticks, [f"{t:g}" for t in ticks])
+    axis.set_minor_formatter(NullFormatter())
+
+
 def _plot_latency_vs_rate(results: list[RateResult], path: Path) -> None:
     fig = new_figure(7, 4.5)
     ax = fig.add_subplot()
@@ -237,6 +259,10 @@ def _plot_latency_vs_rate(results: list[RateResult], path: Path) -> None:
     ax.set_xscale("log", base=2)
     ax.set_xticks(rates, [str(r) for r in rates])
     ax.set_yscale("log")
+    values = [r.client_ms[key] for r in results for key, _, _ in series]
+    lower, upper = min(values) * 0.8, max(*values, BUDGET_P99_MS) * 1.25
+    ax.set_ylim(lower, upper)
+    _plain_log_ticks(ax.yaxis, lower, upper)
     label_axes(ax, "Target arrival rate (requests/s)", "Client-side latency (ms, log scale)")
     ax.legend(frameon=False, fontsize=9, labelcolor=INK_MUTED, loc="upper left")
     style_axes(ax, "POST /v1/score latency by load", grid="both")
@@ -252,21 +278,19 @@ def _plot_histogram(samples: npt.NDArray[np.float64], rate: int, path: Path) -> 
     upper = max(float(samples.max()), BUDGET_P99_MS) * 1.15
     counts = ax.hist(samples, bins=np.geomspace(lower, upper, 70).tolist(), color=SERIES[0],
                      edgecolor="white", linewidth=0.4)[0]  # fmt: skip
-    ax.set_ylim(0, float(np.max(counts)) * 1.2)  # headroom for the marker labels
+    ax.set_ylim(0, float(np.max(counts)) * 1.3)  # headroom for the marker labels
     ax.set_xscale("log")
     p50, p99 = (float(v) for v in np.percentile(samples, [50, 99]))
     markers = (
         (p50, f" p50 {p50:.1f} ms", INK_MUTED, 0.95),
-        (p99, f" p99 {p99:.1f} ms", INK_MUTED, 0.88),
-        (BUDGET_P99_MS, " budget 50 ms", BASELINE, 0.95),
+        (p99, f" p99 {p99:.1f} ms", INK_MUTED, 0.89),
+        (BUDGET_P99_MS, " budget 50 ms", BASELINE, 0.83),  # own height: p50 or p99 can be close
     )
     for value, label, color, height in markers:
         ax.axvline(value, color=color, linewidth=1)
         ax.text(value, height, label, transform=ax.get_xaxis_transform(), color=INK_MUTED,
                 fontsize=8)  # fmt: skip
-    ticks = [t for t in (0.5, 1, 2, 5, 10, 20, 50, 100, 200, 500, 1000) if lower <= t <= upper]
-    ax.set_xticks(ticks, [f"{t:g}" for t in ticks])
-    ax.xaxis.set_minor_formatter(NullFormatter())
+    _plain_log_ticks(ax.xaxis, lower, upper)
     label_axes(ax, "Client-side latency (ms, log scale)", "Requests per bin")
     style_axes(ax, f"Latency distribution at {rate} requests/s ({samples.size:,} requests)")
     fig.savefig(path)
@@ -320,18 +344,20 @@ def write_latency_report(
         "",
         "Client latency is measured by k6 from request start to response end; server stages come"
         " from the decision log of the same requests. **Sustained** means every scheduled"
-        " request started, none failed, and the achieved rate stayed within 2% of the target.",
+        " request started, none failed, and the achieved rate stayed within 2% of the target. HTTP"
+        " status 0 means k6 received no response (connection reset or timeout).",
         "",
-        "| Target rps | Achieved rps | Sustained | Dropped | Errors | p50 ms | p95 ms | p99 ms"
-        " | max ms | server p99 ms |",
-        "|---|---|---|---|---|---|---|---|---|---|",
+        "| Target rps | Achieved rps | Sustained | Dropped | Errors | HTTP status | p50 ms | p95 ms"
+        " | p99 ms | max ms | server p99 ms |",
+        "|---|---|---|---|---|---|---|---|---|---|---|",
     ]
     for r in results:
         c = r.client_ms
+        statuses = " · ".join(f"{code}: {n:,}" for code, n in r.status_counts.items()) or "n/a"
         lines.append(
             f"| {r.target_rps} | {r.achieved_rps:.1f} | {'yes' if r.sustained else 'no'}"
-            f" | {r.dropped_iterations:,} | {100 * r.failed_rate:.2f}% | {c['med']:.2f}"
-            f" | {c['p(95)']:.2f} | {c['p(99)']:.2f} | {c['max']:.2f}"
+            f" | {r.dropped_iterations:,} | {100 * r.failed_rate:.2f}% | {statuses}"
+            f" | {c['med']:.2f} | {c['p(95)']:.2f} | {c['p(99)']:.2f} | {c['max']:.2f}"
             f" | {r.server_ms['total_ms'].get('p99', float('nan')):.2f} |"
         )
     within = headline.client_ms["p(99)"] < BUDGET_P99_MS
@@ -386,11 +412,15 @@ def rebuild_latency_report(out_dir: Path) -> Path:
     from the recording.
     """
     payload = json.loads((out_dir / f"{REPORT_STEM}.json").read_text())
-    names = {field.name for field in fields(RateResult)}
-    results = [
-        RateResult(**{key: value for key, value in row.items() if key in names})
-        for row in payload["results"]
-    ]
+    names = {item.name for item in fields(RateResult)}
+    results = []
+    for row in payload["results"]:
+        result = RateResult(**{key: value for key, value in row.items() if key in names})
+        samples = out_dir / "raw" / f"rate_{result.target_rps}.csv"
+        if not result.status_counts and samples.exists():
+            # Recorded before reports counted status codes: derive them from the same k6 samples.
+            result = replace(result, status_counts=_status_counts(samples))
+        results.append(result)
     return write_latency_report(
         results,
         out_dir,

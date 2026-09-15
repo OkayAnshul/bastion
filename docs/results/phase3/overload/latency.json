@@ -1,0 +1,71 @@
+{
+  "git_revision": "083d588-dirty",
+  "hardware": {
+    "cpu": "12th Gen Intel(R) Core(TM) i7-1255U",
+    "logical_cpus": "12",
+    "memory": "15.3 GiB",
+    "os": "Linux 7.0.2-arch1-1",
+    "python": "3.12.14",
+    "cpu_governor": "powersave",
+    "on_ac_power": "yes"
+  },
+  "setup": {
+    "Service": "`bastion serve`, 1 worker process(es), JSONL decision log",
+    "Model": "local/da7db7ba6d194aae8cddbe1d35519fc3 (37 inputs), synthetic training data",
+    "Online store": "Redis 8.6.6 in a rootless Podman container, host network",
+    "History in Redis": "271,529 events and 248,582 labels",
+    "Requests": "20,000 synthetic payloads, cycled",
+    "Load generator": "k6 (docker.io/grafana/k6:1.8.1) in a container, host network, constant arrival rate",
+    "Per rate": "30 s, after one 10 s warm-up run"
+  },
+  "results": [
+    {
+      "target_rps": 800,
+      "duration_s": 30,
+      "achieved_rps": 787.1968660607521,
+      "requests": 23792,
+      "failed_rate": 0.02328513786146604,
+      "dropped_iterations": 208,
+      "client_ms": {
+        "max": 789.157559,
+        "min": 3.161025,
+        "avg": 114.3528266218477,
+        "med": 35.1379745,
+        "p(90)": 311.52097890000005,
+        "p(95)": 351.11712090000003,
+        "p(99)": 395.8132521200001
+      },
+      "server_ms": {
+        "redis_ms": {
+          "p50": 21.636111,
+          "p95": 236.18605374999996,
+          "p99": 276.71621187,
+          "max": 715.257522
+        },
+        "features_ms": {
+          "p50": 0.4163575,
+          "p95": 0.5641293499999999,
+          "p99": 0.952906590000001,
+          "max": 2.380146
+        },
+        "model_ms": {
+          "p50": 0.111703,
+          "p95": 0.22570804999999997,
+          "p99": 0.32379347000000025,
+          "max": 1.469025
+        },
+        "total_ms": {
+          "p50": 22.2609145,
+          "p95": 236.73794744999998,
+          "p99": 277.26590524,
+          "max": 715.75391
+        }
+      },
+      "status_counts": {
+        "200": 23238,
+        "503": 554
+      },
+      "sustained": false
+    }
+  ]
+}
