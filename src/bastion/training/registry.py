@@ -90,3 +90,19 @@ def load_registered_bundle(model_name: str, alias: str) -> tuple[ModelBundle, st
     mlmodel = yaml.safe_load((local / "MLmodel").read_text())
     relative = mlmodel["flavors"]["python_function"]["artifacts"][_ARTIFACT_KEY]["path"]
     return ModelBundle.load(local / relative), f"{model_name}/{version.version}"
+
+
+def load_bundle(model_path: Path | None = None) -> tuple[ModelBundle, str]:
+    """A bundle directory if one is given or configured, else the configured registry alias.
+
+    Returns the bundle and a version label: ``local/<run id>`` or the registry's name and version.
+    """
+    from bastion.config import get_settings
+
+    settings = get_settings()
+    path = model_path or settings.model_path
+    if path is not None:
+        bundle = ModelBundle.load(path)
+        return bundle, f"local/{bundle.metadata.get('mlflow_run_id', path.name)}"
+    mlflow.set_tracking_uri(settings.mlflow_tracking_uri)
+    return load_registered_bundle(settings.model_name, settings.model_alias)

@@ -1,6 +1,6 @@
 .DEFAULT_GOAL := help
 .PHONY: help setup lint format test test-integration test-data up down logs data eda baseline train \
-	experiment-leakage serve bench-prepare bench
+	experiment-leakage serve bench-prepare bench policy
 
 UV      ?= uv
 RUN     := $(UV) run
@@ -69,3 +69,7 @@ bench-prepare: ## Load Redis with benchmark history and write request payloads (
 
 bench: ## k6 latency benchmark against a running service into docs/results/phase3/
 	$(RUN) bastion bench latency
+
+# ---------------------------------------------------------------- phase 4
+policy: ## Review-budget sweep of the decision policy into docs/results/phase4/ (logged to MLflow)
+	$(RUN) bastion policy sweep

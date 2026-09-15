@@ -76,6 +76,25 @@ def test_without_a_binding_budget_every_row_gets_its_cheapest_action() -> None:
     assert not decisions.capped.any()
 
 
+@pytest.mark.parametrize(
+    ("amount", "expected"),
+    [
+        # Bands from the cost formulas (learning log 4.3): review beats approve above r / (c·a);
+        # it beats block below (m·a + f - r) / (m·a + f + (1 - c)·a).
+        (20.0, {0.1: "approve", 0.2: "block", 0.3: "block", 0.9: "block"}),  # never worth a review
+        (200.0, {0.02: "approve", 0.03: "review", 0.40: "review", 0.41: "block"}),
+        (5_000.0, {0.001: "approve", 0.002: "review", 0.49: "review", 0.50: "block"}),
+    ],
+)
+def test_the_review_band_widens_with_the_amount(amount: float, expected: dict[float, str]) -> None:
+    p = np.array(list(expected))
+    costs = expected_costs(p, np.full(p.size, amount), COSTS)
+    decisions = decide_expected_loss(
+        costs, np.zeros(p.size, dtype=np.int64), threshold=0.0, reviews_per_day=p.size
+    )
+    assert decisions.actions.tolist() == list(expected.values())
+
+
 # ------------------------------------------------------------------------------ review budget
 
 

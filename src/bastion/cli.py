@@ -30,11 +30,13 @@ stream_app = typer.Typer(
     no_args_is_help=True, help="Streaming path: topics, replay, feature builder."
 )
 bench_app = typer.Typer(no_args_is_help=True, help="Benchmarks with published results.")
+policy_app = typer.Typer(no_args_is_help=True, help="Decision policy: budget sweep and tuning.")
 app.add_typer(data_app, name="data")
 app.add_typer(baseline_app, name="baseline")
 app.add_typer(experiment_app, name="experiment")
 app.add_typer(stream_app, name="stream")
 app.add_typer(bench_app, name="bench")
+app.add_typer(policy_app, name="policy")
 
 EventsOption = Annotated[
     Path | None,
@@ -488,3 +490,66 @@ def bench_profile(
     typer.echo("hottest leaf frames:")
     for frame, count in summary.leaves:
         typer.echo(f"{100 * count / summary.samples:5.1f}%  {frame}")
+
+
+# ------------------------------------------------------------------------------ phase 4
+
+
+@policy_app.command("sweep")
+def policy_sweep(
+    events: EventsOption = None,
+    model_path: Annotated[
+        Path | None,
+        typer.Option(
+            "--model-path",
+            help="Model bundle directory (default: BASTION_MODEL_PATH, else the MLflow alias).",
+        ),
+    ] = None,
+    out_dir: OutDirOption = None,
+    dataset: DatasetOption = "IEEE-CIS",
+) -> None:
+    """Sweep the daily review budget: tune on the calibration window, evaluate on the test one."""
+    from bastion.data.labels import load_label_delay_config
+    from bastion.data.splits import load_split_config
+    from bastion.evaluation.cost import load_cost_model
+    from bastion.policy.config import load_policy_config
+    from bastion.policy.sweep import log_policy_sweep, run_policy_sweep, write_policy_report
+    from bastion.provenance import git_revision
+    from bastion.rules.baseline import load_rule_config
+    from bastion.training.registry import load_bundle
+    from bastion.training.tracking import data_fingerprint
+
+    frame, source = _read_events(events)
+    bundle, version = load_bundle(model_path)
+    settings = get_settings()
+    costs = load_cost_model()
+    result = run_policy_sweep(
+        frame,
+        bundle,
+        splits=load_split_config(),
+        labels=load_label_delay_config(),
+        costs=costs,
+        policy=load_policy_config(),
+        rules=load_rule_config(),
+    )
+    path = write_policy_report(
+        result,
+        costs,
+        _results_dir(out_dir, "phase4"),
+        dataset=dataset,
+        source=str(source),
+        model_version=version,
+    )
+    run_id = log_policy_sweep(
+        result,
+        path,
+        tracking_uri=settings.mlflow_tracking_uri,
+        artifacts_dir=settings.artifacts_dir,
+        tags={
+            "dataset": dataset,
+            "git_revision": git_revision(),
+            "model_version": version,
+            "data_fingerprint": data_fingerprint(frame),
+        },
+    )
+    typer.echo(f"wrote {path} · MLflow run {run_id}")

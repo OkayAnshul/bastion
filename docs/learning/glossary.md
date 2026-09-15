@@ -68,3 +68,34 @@ Wide plateaus near the top are where the CPU actually spends its time.
 
 **Event loop.** The single thread that runs all coroutines in an asyncio process. CPU work inside a
 handler blocks every other request on that loop, so it appears as waiting time in their Redis stage.
+
+## Phase 4 — decisions and explanations
+
+**Expected loss.** The cost of an action averaged over what might be true: for approving a payment
+with fraud probability p, `p × amount`. It is only meaningful when p is calibrated.
+
+**Cost-sensitive decision.** Choosing the action with the lowest expected cost, instead of the most
+likely class. Different mistakes cost different amounts, and the costs, not accuracy, decide.
+
+**Review budget (capacity).** How many cases analysts can look at per day. It turns the per-payment
+decision into a constrained one: a review spent now is unavailable for a larger case later.
+
+**Review band.** The probabilities for which human review is cheaper than both approving and
+blocking. It depends on the amount: none for small payments, wide for large ones.
+
+**Review threshold (τ).** The minimum expected saving a review must bring before a payment is sent
+to review. Tuned per budget, so low-value cases don't use up the day's capacity.
+
+**False-decline rate.** The share of legitimate transactions that were blocked.
+
+**Hard-rule override.** A rule that decides before the model does: blocklists, allowlists, velocity
+caps. Overrides are how operations teams act on what they know right now.
+
+**SHAP value.** An input's share of one prediction, from Shapley values in cooperative game theory:
+the average change in the output when that input joins the others, over all orders.
+
+**TreeSHAP.** An exact, fast algorithm for SHAP values of tree ensembles. LightGBM computes it with
+`predict(..., pred_contrib=True)`: one value per input plus a bias, summing to the raw margin.
+
+**Reason code.** A short, readable statement of why a decision was made. In Bastion, the inputs with
+the largest positive TreeSHAP contributions.
